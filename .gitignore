@@ -1,0 +1,10 @@
+notebooks/.ipynb_checkpoints/
+notebooks/pynotebooks/.ipynb_checkpoints/
+notebooks/.DS_store
+# *.ipynb
+notebooks/__pycache*
+.DS_Store
+.python-version
+src/__pycache*
+si4kalman/__pycache*
+si4kalman_casadi/__pycache*
