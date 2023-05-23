@@ -1,9 +1,14 @@
-# si4kalman-os
-This project's purpose is to adapt a system identification algorithm to the use of Kalman Filter later, either by jointly estimating the noise-covariances, or by using the Kalman filter performance as an objectve function
+# Sequential Quadratic Programming for Maximum Likelihood Estimation of parameters in Linear Time Variant systems.
+This repository contains code assiociated with the article _"An Efficient Method for the Joint Estimation of System Parameters and
+Noise Covariances for Linear Time-Variant Systems"_
 
 ## Prerequisites
 
+Python packages
 ```
-pip install casadi
-conda install -c conda-forge cvxopt
+numpy
+scipy
+matplotlib
+casadi
+cvxopt
 ```
