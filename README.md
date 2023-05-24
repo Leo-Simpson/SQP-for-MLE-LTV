@@ -35,11 +35,12 @@ Note that also the time-varying behavior comes from the inputs $u_k$, which can 
 Finally, the matrix $C$ is fixed here (it would be possible to change that in the code without two many efforts however).
 
 Also, the paremeters are assumed to be in some set defined with inequality constraints:
-$$
+```math
 \begin{align}
 	\{ (\alpha, \beta) \in \mathbb{R}^{n_{\alpha}}\times \mathbb{R}^{n_{\beta}}  \; \big| \; h(\alpha, \beta) \geq 0 \},
 \end{align}
-$$
+```
+
 (Note that the inequality is opposite sign of how it is in the paper).
 
 ## The Estimation
@@ -48,7 +49,7 @@ We consider optimization problems for estimation of $\alpha$ and $\beta$.
 These are basically maximizing the performance of a Kalman filter on the training data over the parameters $\alpha$ and $\beta$.
 
 
-$$
+```math
 \begin{align}
 		&\underset{ \substack{
 				\alpha, \beta, \bm{e}, \bm{S},
@@ -72,16 +73,18 @@ $$
 		%		\phi_k(\alpha, P_k, S_k),
 	\end{align}
 $$
+```
+
 
 Regarding the cost function $L(\cdot, \cdot)$, two options are considered
-$$
+```math
 \begin{align}
 		\begin{split}
 			L_{\mathrm{MLE}}(e, S) & \equiv e^{\top} S^{-1} e + \log \det S, \\
 			L_{\mathrm{PredErr}}(e, S) & \equiv \left\lVert e \right\rVert^2.
 		\end{split}
 	\end{align}
-$$
+```
 The first of them is reffered as "MLE" because it corresponds to the Maximum-Likelihood problem, while the second is called "PredErr" because it corresponds to the Prediction Error Methods.
 
 # Description of the algorithms
