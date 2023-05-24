@@ -18,14 +18,16 @@ Python packages
 ## Parametric Linear Time Variant Systems
 
 We assume that the data is generated through the following dynamical system (linear, and with Gaussian Noise)
-$$
+
+```math
 \begin{align}
 			x_{k+1} &= A(u_k; \alpha) x_k + b(u_k; \alpha) + w_k, && k = 0, \dots, N-1, \nonumber\\
 			y_{k} &= C x_k + v_k, &&k = 0, \dots, N, \\
 			w_k &\sim \mathcal{N}\left( 0, Q_k(\beta) \right), &&k = 0, \dots, N-1,  \nonumber \\
 			v_k &\sim \mathcal{N}\left( 0, R_k(\beta) \right), &&k = 0, \dots, N,  \nonumber 
 \end{align}
-$$
+```
+
 where $\alpha$ are parameters of the nominal model, and $\beta$ are parameters corresponding to the perturbation model (Note: in the paper, this disctinction was not made).
 
 Note that also the time-varying behavior comes from the inputs $u_k$, which can appear in the dynamics linearly or nonlinearly (Note: this is also different from the paper, where the concept of inputs was not present).
