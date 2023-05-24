@@ -1,8 +1,7 @@
 notebooks/.ipynb_checkpoints/
 notebooks/pynotebooks/.ipynb_checkpoints/
-notebooks/*.ipynb
+*.ipynb
 notebooks/.DS_store
-# *.ipynb
 notebooks/__pycache*
 .DS_Store
 .python-version
