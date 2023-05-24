@@ -60,7 +60,7 @@ These are basically maximizing the performance of a Kalman filter on the trainin
 		& \mathrm{subject}  \, \mathrm{to} \, \nonumber
 		\\&\qquad
 		S_k = C \, P_{k} \, C^{\top} + R(\beta), \nonumber
-		\\&\phantom{ \mathrm{s} \,}
+		\\&\qquad
 		e_k = y_k - C \hat{x}_k,
 		\\&\qquad
 		\hat{x}_{k+1} = A(u_k; \alpha)\big( \hat{x}_{k} + P_{k} \, C^{\top} S_k^{-1} e_k \big) + b(u_k; \alpha), \nonumber
@@ -106,7 +106,7 @@ It is composed by several steps:
    
     The gradient is always computed exactly. For the Hessian, we make some approximation.
     Regarding the "PredErr" method, we use Gauss-Newton Hessian approximation.
-    Regarding "MLE" method, we make a similar one, which falls into the framework of Generalized Gauss-Netwon Hessian approximation after omitting the second-derivative of the term $\log \det S$ (indeed, this term is concave in $S$, while the other term is convex in $\left( e, S \right)$).
+    Regarding "MLE" method, we make a similar one, which falls into the framework of Generalized Gauss-Netwon Hessian approximation after omitting the second-derivative of the term $\log \det S$ (indeed, this term is concave in $S$, while the other term is convex in $\left( e, S \right)$  ).
 - Globalization via line-search. 
   
   Perform line-search in the direction found by backtracking until the Armijo condition is reached. 
