@@ -58,21 +58,18 @@ These are basically maximizing the performance of a Kalman filter on the trainin
 			}
 		}{\mathrm{minimize}} \; \sum_{k=0}^{N} e_k^\top \big(S_k\big)^{-1} e_k + \log \det S_k \nonumber \\
 		& \mathrm{subject}  \, \mathrm{to} \, \nonumber
-		\\&\phantom{ \mathrm{s} \,}
+		\\&\qquad
 		S_k = C \, P_{k} \, C^{\top} + R(\beta), \nonumber
-		%		\\&\phantom{ \mathrm{subject} \,}
-		%		M_k \, S_k = I_{\ny},
 		\\&\phantom{ \mathrm{s} \,}
 		e_k = y_k - C \hat{x}_k,
-		\\&\phantom{ \mathrm{s} \,}
+		\\&\qquad
 		\hat{x}_{k+1} = A(u_k; \alpha)\big( \hat{x}_{k} + P_{k} \, C^{\top} S_k^{-1} e_k \big) + b(u_k; \alpha), \nonumber
-		\\&\phantom{ \mathrm{s} \,}
+		\\&\qquad
 		P_{k+1} = A(u_k; \alpha) \left(  P_k - P_k \, C^{\top} S^{-1} \, C \, P_k  \right) A(u_k; \alpha)^{\top} + Q(\beta) \nonumber,
         \\&\phantom{ \mathrm{s} \,}
         h(\alpha, \beta) \geq 0 \nonumber
 		%		\phi_k(\alpha, P_k, S_k),
 	\end{align}
-$$
 ```
 
 
