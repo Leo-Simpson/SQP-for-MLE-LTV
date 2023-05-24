@@ -3,7 +3,7 @@ import numpy as np # type: ignore
 from time import time
 from .misc import symmetrize, symmetrize, psd_inverse
 
-default_params = {"maxiter":50,
+default_opts = {"maxiter":50,
           "pen_step":0.,
           "tol.kkt":0.1,
           "tol.direction":1e-3,
@@ -81,11 +81,11 @@ class OPTKF:
         self.inds_tri_M = np.tri(self.model.ny, k=-1, dtype=np.bool)
         self.rtimes["prepare"] += time() - t0
 
-    def complete_param(self, param):
-        params = default_params.copy()
-        for key, item in param.items():
-            params[key] = item
-        return params
+    def complete_opts(self, opts):
+        opts = default_opts.copy()
+        for key, item in opts.items():
+            opts[key] = item
+        return opts
 
     def get_AbC(self, alpha):
         t0 = time()
@@ -405,19 +405,19 @@ class OPTKF:
         self.rtimes["QP"] += time() - t0
         return x, lam, der
 
-    def SQP_kalman(self, alpha0, beta0, param={}, approx=False, verbose=True, path=False, rescale=True):
+    def SQP_kalman(self, alpha0, beta0, opts={}, approx=False, verbose=True, path=False, rescale=True):
         t0 = time()
-        params = self.complete_param(param)
+        opts = self.complete_opts(opts)
         nalpha = self.model.nalpha
         alphaj = alpha0.copy()
         betaj = beta0.copy()
         states, matrices = self.kalman_simulate(alphaj, betaj, approx=approx)
         cost = self.cost_eval(states, matrices, alphaj, betaj, approx=approx)
         objective_scale = 1.
-        tol_direction = objective_scale * params["tol.direction"]
+        tol_direction = objective_scale * opts["tol.direction"]
         if path:
             alphas, betas = [], []
-        for j in range(params["maxiter"]):
+        for j in range(opts["maxiter"]):
             if path:
                 alphas.append(alphaj)
                 betas.append(betaj)
@@ -426,7 +426,7 @@ class OPTKF:
             derivatives = self.kalman_derivatives(alphaj, betaj, states, matrices, approx=approx)
             gradient, hessian = self.cost_derivatives(states, matrices, derivatives, approx=approx)
             ab = np.concatenate([alphaj, betaj])
-            hessian_ = hessian + 2*params["pen_step"]* np.eye(len(ab))
+            hessian_ = hessian + 2*opts["pen_step"]* np.eye(len(ab))
             grad0 = gradient - hessian_ @ ab
             hessian_ = hessian_ + 2*self.problem.L2pen * np.eye(len(ab))
             linconstr = self.make_lin_constr(alphaj, betaj)
@@ -440,7 +440,7 @@ class OPTKF:
                 print(f"beta {betaj}, betanext {beta_next}")
             kkt_error = self.eval_kkt_error(alphaj, betaj, gradient, multiplier)
             
-            if kkt_error < params["tol.kkt"]:
+            if kkt_error < opts["tol.kkt"]:
                 termination = "tol.kkt"
                 niter = j
                 break
@@ -457,13 +457,13 @@ class OPTKF:
             if verbose:
                 print(f"Iteration {j}, Current cost {cost:2e}, kkt error {kkt_error:2e}, direction {der:2e}")
             tau, new_cost, states, matrices = self.globalization(alphaj, betaj, alpha_next, beta_next, der, cost,
-                                            params["globalization.maxiter"], params["globalization.gamma"], params["globalization.beta"],
+                                            opts["globalization.maxiter"], opts["globalization.gamma"], opts["globalization.beta"],
                                             approx=approx, verbose=verbose)
             if states is None:
                 termination = "globalization.maxiter"
                 niter = j+1
                 break
-            if cost - new_cost < max(abs(cost),abs(new_cost)) * params["rtol.cost_decrease"]:
+            if cost - new_cost < max(abs(cost),abs(new_cost)) * opts["rtol.cost_decrease"]:
                 termination = "rtol.cost_decrease"
                 niter = j+1
                 break
@@ -472,8 +472,8 @@ class OPTKF:
             alphaj = (1 - tau) * alphaj + tau * alpha_next
             betaj = (1 - tau) * betaj + tau * beta_next
             cost = new_cost
-        if j == params["maxiter"]-1:
-            niter = params["maxiter"]
+        if j == opts["maxiter"]-1:
+            niter = opts["maxiter"]
             termination = "maxiter"
 
         if path:
