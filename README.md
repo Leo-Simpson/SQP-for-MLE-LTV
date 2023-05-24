@@ -112,5 +112,5 @@ It is composed by several steps:
 
 # How to use the package
 
-See the tutorial example in notebooks/pynotebooks/minimal_example.py
+See the tutorial example in notebooks/minimal_example.py
 
