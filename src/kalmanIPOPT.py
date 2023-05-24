@@ -93,7 +93,7 @@ class NLP:
     def remember(self, obj):
         self.keep.append(obj)
 
-def nlp_kalman_exact(problem, alpha0, beta0):
+def nlp_kalman(problem, alpha0, beta0, formulation):
     us = problem.us
     ys = problem.ys
     model = problem.model
@@ -162,7 +162,13 @@ def nlp_kalman_exact(problem, alpha0, beta0):
         
         innov = ys[k] - model.G(x_k)
         logdet_term = ca.log( ca.fabs(ca.det(S_k))  )
-        nlp.add_value(innov.T @(M_k @ innov) +  logdet_term)
+        if formulation == "MLE":
+            stage_cost = innov.T @(M_k @ innov) +  logdet_term
+        elif formulation == "PredErr":
+            stage_cost = innov.T @ innov
+        else:
+            raise ValueError("Formulation {} is unknown. Choose between 'MLE' or 'PredError'".format(formulation))
+        nlp.add_value(stage_cost)
         if k == N:
             break
         P_next, x_next = update(x_k, P_k, Q, S_k, alpha, us[k], ys[k], M=M_k)
@@ -179,8 +185,8 @@ def nlp_kalman_exact(problem, alpha0, beta0):
 
     return nlp
 
-def nlp_kalman_solve_exact(problem, alpha0, beta0, opts={}, rescale=False):
-    nlp = nlp_kalman_exact(problem, alpha0, beta0)
+def nlp_kalman_solve(problem, alpha0, beta0, formulation, opts={}, rescale=False):
+    nlp = nlp_kalman(problem, alpha0, beta0, formulation)
     nlp.stack()
     nlp.presolve(opts=opts)
     sol = nlp.solve()

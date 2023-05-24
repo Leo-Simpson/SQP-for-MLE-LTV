@@ -287,41 +287,20 @@ class ProblemParser:
 
     def solve(self, alpha0, beta0, formulation, algorithm, opts={}, verbose=False, rescale=False):
         if algorithm == "SQP":
-            if formulation == "Exact":
                 from .kalmanSQP import OPTKF
                 optkalman = OPTKF(self, eqconstr=rescale)
                 optkalman.prepare()
                 optkalman.rinit()
                 alpha, beta, stats = \
-                    optkalman.SQP_kalman(alpha0, beta0, approx=False, opts=opts, verbose=verbose, rescale=rescale)
-            elif formulation == "Approx":
-                from .kalmanSQP import OPTKF
-                optkalman = OPTKF(self, eqconstr=rescale)
-                optkalman.prepare()
-                optkalman.rinit()
-                alpha, beta, stats = \
-                    optkalman.SQP_kalman(alpha0, beta0, approx=True, opts=opts, verbose=verbose, rescale=rescale)
-            else:
-                raise ValueError("Formulation {} is unknown. Choose between 'Exact' or 'Approx'".format(formulation))
+                    optkalman.SQP_kalman(alpha0, beta0, formulation, opts=opts, verbose=verbose, rescale=rescale)
         elif algorithm == "IPOPT":
-            if formulation == "Exact":
-                from .kalmanIPOPT import nlp_kalman_solve_exact
-                if verbose:
-                    alpha, beta, stats = nlp_kalman_solve_exact(self, alpha0, beta0, opts=opts, rescale=rescale)
-                else:
-                    stdout = open('nul', 'w')
-                    with contextlib.redirect_stdout(stdout):
-                        alpha, beta, stats = nlp_kalman_solve_exact(self, alpha0, beta0, opts=opts, rescale=rescale)
-            elif formulation == "Approx":
-                from .kalmanIPOPT import nlp_kalman_solve
-                if verbose:
-                    alpha, beta, stats = nlp_kalman_solve(self, alpha0, beta0, formulation="normal", opts=opts)
-                else:
-                    stdout = open('nul', 'w')
-                    with contextlib.redirect_stdout(stdout):
-                        alpha, beta, stats = nlp_kalman_solve(self, alpha0, beta0, formulation="normal", opts=opts)
+            from .kalmanIPOPT import nlp_kalman_solve
+            if verbose:
+                alpha, beta, stats = nlp_kalman_solve(self, alpha0, beta0, formulation, opts=opts, rescale=rescale)
             else:
-                raise ValueError("Formulation {} is unknown. Choose between 'Exact' or 'Approx'".format(formulation))
+                stdout = open('nul', 'w')
+                with contextlib.redirect_stdout(stdout):
+                    alpha, beta, stats = nlp_kalman_solve(self, alpha0, beta0, formulation, opts=opts, rescale=rescale)
         else:
             raise ValueError("Algorithm {} is unknown. Choose between 'SQP' or 'IPOPT'".format(algorithm))
             

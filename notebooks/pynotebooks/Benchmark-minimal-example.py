@@ -111,7 +111,7 @@ alpha_true, beta_true
 # the flag lti allow to speed things up for LTI systems 
 problemTrain =ProblemParser(
     model, ys_train, us_train, x0, P0, lti=True)
-formulation = "Exact"  # can be "Exact", "Approx"
+formulation = "MLE"  # can be "MLE", "PredErr" (remark: to apply PredErr, one needs a different parameterization)
 
 # %%
 dict_opts = {

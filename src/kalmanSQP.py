@@ -50,7 +50,7 @@ class OPTKF:
             
     def make_constr(self, eqconstr=True):
         self.derconstraints = self.model.Ineq.jacobian()
-        # equality constraint, only used in approx
+        # equality constraint, only used in PredErr to remove one degree of freedom on beta
         alpha = ca.SX.sym("alpha_sym", self.model.nalpha)
         beta = ca.SX.sym("beta_sym", self.model.nbeta)
         Q, R = self.model.get_QR(beta)
@@ -125,7 +125,7 @@ class OPTKF:
         self.rtimes["get_dQR"] += time() - t0
         return dQ, dR
    
-    def kalman_simulate_matrices(self, alpha, beta):
+    def kalman_simulate_matrices_MLE(self, alpha, beta):
         t0 = time()
         # symbol = type(alpha) is ca.SX
         S = np.empty( (self.N+1, self.model.ny, self.model.ny) )
@@ -154,7 +154,7 @@ class OPTKF:
         self.rtimes["kalman_simulate_matrices"] += time() - t0
         return matrices
    
-    def kalman_simulate_matrices_approx(self, alpha, beta):
+    def kalman_simulate_matrices_PredErr(self, alpha, beta):
         t0 = time()
         # symbol = type(alpha) is ca.SX
         K = np.empty( (self.N+1, self.model.nx, self.model.ny) )
@@ -181,7 +181,7 @@ class OPTKF:
         self.rtimes["kalman_simulate_matrices"] += time() - t0
         return matrices
 
-    def kalman_simulate_states(self, matrices):
+    def kalman_simulate_states_MLE(self, matrices):
         t0 = time()
         # symbol = type(alpha) is ca.SX
         z = np.empty( (self.N+1, self.model.ny) )
@@ -196,7 +196,7 @@ class OPTKF:
         self.rtimes["kalman_simulate_states"] += time() - t0
         return states
 
-    def kalman_simulate_states_approx(self, matrices):
+    def kalman_simulate_states_PredErr(self, matrices):
         t0 = time()
         # symbol = type(alpha) is ca.SX
         e = np.empty( (self.N+1, self.model.ny) )
@@ -213,16 +213,16 @@ class OPTKF:
         self.rtimes["kalman_simulate_states"] += time() - t0
         return states
 
-    def kalman_simulate(self, alpha, beta, approx=False):
-        if approx:
-            matrices = self.kalman_simulate_matrices_approx(alpha, beta)
-            states = self.kalman_simulate_states_approx(matrices)
-        else:
-            matrices = self.kalman_simulate_matrices(alpha, beta)
-            states = self.kalman_simulate_states(matrices)
+    def kalman_simulate(self, alpha, beta, formulation):
+        if formulation=="MLE":
+            matrices = self.kalman_simulate_matrices_MLE(alpha, beta)
+            states = self.kalman_simulate_states_MLE(matrices)
+        elif formulation=="PredErr":
+            matrices = self.kalman_simulate_matrices_PredErr(alpha, beta)
+            states = self.kalman_simulate_states_PredErr(matrices)
         return states, matrices
   
-    def kalman_derivatives_(self, alpha, beta, states, matrices):
+    def kalman_derivatives_MLE(self, alpha, beta, states, matrices):
         t0 = time()
         # ab is the concatenation (alpha, beta)
         dz_dalpha = np.empty((self.N+1, self.model.ny, self.model.nalpha))
@@ -272,11 +272,11 @@ class OPTKF:
         dz_dab = np.concatenate([dz_dalpha, dz_dbeta], axis=-1)
         dM_dab = np.concatenate([dM_dalpha, dM_dbeta], axis=-1)
         derivatives = {"dz" : dz_dab, "dM" : dM_dab}
-        self.delete_unecessary(states, matrices, approx=False)
+        self.delete_unecessary(states, matrices, "MLE")
         self.rtimes["kalman_derivatives"] += time() - t0
         return derivatives
 
-    def kalman_derivatives_approx(self, alpha, beta, states, matrices):
+    def kalman_derivatives_PredErr(self, alpha, beta, states, matrices):
         t0 = time()
         # ab is the concatenation (alpha, beta)
         de_dalpha = np.empty((self.N+1, self.model.ny, self.model.nalpha))
@@ -320,46 +320,42 @@ class OPTKF:
 
         de_dab = np.concatenate([de_dalpha, de_dbeta], axis=-1)
         derivatives = {"de" : de_dab}
-        self.delete_unecessary(states, matrices, approx=True)
+        self.delete_unecessary(states, matrices, "PredErr")
         self.rtimes["kalman_derivatives"] += time() - t0
         return derivatives
 
-    def kalman_derivatives(self, alpha, beta, states, matrices, approx=False):
-        if approx:
-            return self.kalman_derivatives_approx(alpha, beta, states, matrices)
-        else:
-            return self.kalman_derivatives_(alpha, beta, states, matrices)
-
-    def delete_unecessary(self, states, matrices, approx=False):
+    def kalman_derivatives(self, alpha, beta, states, matrices, formulation):
+        if formulation=="MLE":
+            return self.kalman_derivatives_MLE(alpha, beta, states, matrices)
+        elif formulation=="PredErr":
+            return self.kalman_derivatives_PredErr(alpha, beta, states, matrices)
+            
+    def delete_unecessary(self, states, matrices, formulation):
         del states["x"]
         del matrices["M"]
         del matrices["P"]
         del matrices["A"]
         del matrices["b"]
-        if approx:
+        if formulation=="MLE":
+            del matrices["L"]
+        elif formulation=="PredErr":
             del matrices["Pest"]
             del matrices["K"]
-        else:
-            del matrices["L"]
 
-    def cost_eval(self, states, matrices, alpha, beta, approx=False):
+    def cost_eval(self, states, matrices, alpha, beta, formulation):
         t0 = time()
-        if approx:
-            value = np.sum( states["e"]**2 )
-        else:
+        if formulation=="MLE":
             value = np.einsum("kyz,ky,kz->", matrices["S"], states["z"], states["z"], optimize=False) \
                 + np.sum( matrices["logdetS"] )
+        elif formulation=="PredErr":
+            value = np.sum( states["e"]**2 )
         value = value + self.problem.L2pen * (np.sum( alpha**2 ) + np.sum(beta**2 ))
         self.rtimes["cost_eval"] += time() - t0
         return value
 
-    def cost_derivatives(self, states, matrices, derivatives, approx=False, new_hessian=True, neglect_logdet_hessian=True):
+    def cost_derivatives(self, states, matrices, derivatives, formulation, new_hessian=True, neglect_logdet_hessian=True):
         t0 = time()
-        if approx:
-            gradient =  2*np.einsum("kzp,kz->p",derivatives["de"], states["e"], optimize=False)
-            hessian = 2*np.einsum("kzp,kzq->pq", derivatives["de"], derivatives["de"], optimize=False)
-        else:
-            
+        if formulation=="MLE":
             e =  np.einsum("kyz,kz->ky", matrices["S"], states["z"], optimize=False)
             SdM = np.einsum("kyw,kwzp->kyzp", matrices["S"], derivatives["dM"], optimize=False)
             dMe = np.einsum("kywp,kw->kyp", derivatives["dM"], e, optimize=False)
@@ -376,6 +372,9 @@ class OPTKF:
                 hessian = h_quad
             else:
                 hessian = h_quad + h_logdet
+        elif formulation=="PredErr":
+            gradient =  2*np.einsum("kzp,kz->p",derivatives["de"], states["e"], optimize=False)
+            hessian = 2*np.einsum("kzp,kzq->pq", derivatives["de"], derivatives["de"], optimize=False)
 
         self.rtimes["cost_derivatives"] += time() - t0
         return gradient, hessian
@@ -405,14 +404,16 @@ class OPTKF:
         self.rtimes["QP"] += time() - t0
         return x, lam, der
 
-    def SQP_kalman(self, alpha0, beta0, opts={}, approx=False, verbose=True, path=False, rescale=True):
+    def SQP_kalman(self, alpha0, beta0, formulation, opts={}, verbose=True, path=False, rescale=True):
+        if formulation not in ["MLE", "PredErr"]:
+            raise ValueError("Formulation {} is unknown. Choose between 'MLE' or 'PredError'".format(formulation))
         t0 = time()
         opts = self.complete_opts(opts)
         nalpha = self.model.nalpha
         alphaj = alpha0.copy()
         betaj = beta0.copy()
-        states, matrices = self.kalman_simulate(alphaj, betaj, approx=approx)
-        cost = self.cost_eval(states, matrices, alphaj, betaj, approx=approx)
+        states, matrices = self.kalman_simulate(alphaj, betaj, formulation)
+        cost = self.cost_eval(states, matrices, alphaj, betaj, formulation)
         objective_scale = 1.
         tol_direction = objective_scale * opts["tol.direction"]
         if path:
@@ -421,18 +422,18 @@ class OPTKF:
             if path:
                 alphas.append(alphaj)
                 betas.append(betaj)
-            if (not approx) and rescale:
-                betaj = betaj * self.scale(alphaj, betaj, states_and_matrices=(states, matrices), approx=False)
-            derivatives = self.kalman_derivatives(alphaj, betaj, states, matrices, approx=approx)
-            gradient, hessian = self.cost_derivatives(states, matrices, derivatives, approx=approx)
+            if (formulation=="MLE") and rescale:
+                betaj = betaj * self.scale(alphaj, betaj, formulation, states_and_matrices=(states, matrices))
+            derivatives = self.kalman_derivatives(alphaj, betaj, states, matrices, formulation)
+            gradient, hessian = self.cost_derivatives(states, matrices, derivatives, formulation)
             ab = np.concatenate([alphaj, betaj])
             hessian_ = hessian + 2*opts["pen_step"]* np.eye(len(ab))
             grad0 = gradient - hessian_ @ ab
             hessian_ = hessian_ + 2*self.problem.L2pen * np.eye(len(ab))
             linconstr = self.make_lin_constr(alphaj, betaj)
-            if approx:
+            if formulation == "PredErr":
                 lin_eqconstr = self.make_lin_eqconstr(alphaj, betaj)
-            else:
+            elif formulation == "MLE":
                 lin_eqconstr = None
             ab_next, multiplier, der = self.solveQP(hessian_, grad0, linconstr, lin_eqconstr, ab)
             alpha_next, beta_next = ab_next[:nalpha], ab_next[nalpha:]
@@ -456,9 +457,9 @@ class OPTKF:
                 break
             if verbose:
                 print(f"Iteration {j}, Current cost {cost:2e}, kkt error {kkt_error:2e}, direction {der:2e}")
-            tau, new_cost, states, matrices = self.globalization(alphaj, betaj, alpha_next, beta_next, der, cost,
+            tau, new_cost, states, matrices = self.globalization(alphaj, betaj, alpha_next, beta_next, der, cost, formulation,
                                             opts["globalization.maxiter"], opts["globalization.gamma"], opts["globalization.beta"],
-                                            approx=approx, verbose=verbose)
+                                            verbose=verbose)
             if states is None:
                 termination = "globalization.maxiter"
                 niter = j+1
@@ -482,19 +483,19 @@ class OPTKF:
             return alphas, betas
 
         if rescale:
-            betaj = betaj *self.scale(alphaj, betaj, approx=approx)
+            betaj = betaj *self.scale(alphaj, betaj, formulation)
         self.rtimes["total"] += time() - t0
         stats =  {"termination":termination, "niter":niter, "rtimes":self.rtimes}
         stats["return_status"] = stats["termination"]
         return alphaj, betaj, stats
 
-    def globalization(self, alpha0, beta0, alpha1, beta1, der, cost, maxiter, gamma, b, approx=False, verbose=False):
+    def globalization(self, alpha0, beta0, alpha1, beta1, der, cost, formulation, maxiter, gamma, b, verbose=False):
         tau = 1.
         for i_glob in range(maxiter):
             alpha_middle = (1 - tau) * alpha0 + tau * alpha1
             beta_middle = (1 - tau) * beta0 + tau * beta1
-            states, matrices = self.kalman_simulate(alpha_middle, beta_middle, approx=approx)
-            cost_middle = self.cost_eval(states, matrices, alpha_middle, beta_middle, approx=approx)
+            states, matrices = self.kalman_simulate(alpha_middle, beta_middle, formulation)
+            cost_middle = self.cost_eval(states, matrices, alpha_middle, beta_middle, formulation)
             condition = (cost - cost_middle) / tau > gamma * der and np.all(beta_middle >= 0.)
             if condition:
                     return tau, cost_middle, states, matrices
@@ -502,14 +503,14 @@ class OPTKF:
         if verbose: print("Globalization did not finish with tau = {}".format(tau))
         return tau, cost, None, None  
 
-    def scale(self, alpha, beta, states_and_matrices=None, approx=False):
+    def scale(self, alpha, beta, formulation, states_and_matrices=None):
         if states_and_matrices is None:
-            states, matrices = self.kalman_simulate(alpha, beta, approx=approx)
+            states, matrices = self.kalman_simulate(alpha, beta, formulation)
         else:
             states, matrices = states_and_matrices
         dimension = (self.N+1) * self.model.ny
-        if approx:
-            lamb =  np.einsum("kyz,ky,kz->", matrices["M"], states["e"], states["e"]) / dimension
-        else:
+        if formulation=="MLE":
             lamb = np.einsum("kyz,ky,kz->", matrices["S"], states["z"], states["z"])  / dimension
+        elif formulation=="PredErr":
+            lamb =  np.einsum("kyz,ky,kz->", matrices["M"], states["e"], states["e"]) / dimension
         return lamb

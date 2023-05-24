@@ -116,7 +116,7 @@ alpha0 = np.zeros(model.nalpha)
 # ## Optimize over the Kalman filter 
 
 # %%
-formulation = "Exact" # can be "Exact", "Approx"
+formulation = "MLE" # can be "MLE", "PredErr"
 algorithm = "SQP" # can be "SQP" or "IPOPT"
 
 opts = {"pen_step":1e-4, "maxiter":20, "tol.direction":0., "tol.kkt":1e-8} # parameters of the SQP method

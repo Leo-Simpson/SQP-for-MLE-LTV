@@ -131,10 +131,11 @@ alpha0 = rng.random(model.nalpha)* alpha_max
 # ## Optimize over the Kalman filter 
 
 # %%
-formulation = "Exact" # can be "Exact", "Approx"
+formulation = "MLE" # can be "MLE", "PredErr"
 algorithm = "SQP" # can be "SQP" or "IPOPT"
 
 opts = {"pen_step":1e-4, "maxiter":20, "tol.direction":0., "tol.kkt":1e-8} # parameters of the SQP method
+# opts = {} # parameters of IPOPT (here, only default parameters)
 
 # %%
 t0 = time()
@@ -158,8 +159,5 @@ t_pred, y_pred =  model.predictions(us_test, xs_est, alpha_found, npred)
 
 # %%
 fig =plot_est(us_test, ys_test, ys_est, pred=(t_pred, y_pred))
-
-# %%
-# ! jupytext --set-formats ipynb,pynotebooks//py:percent  --update-metadata '{"jupytext": {"cell_metadata_filter":"-all","notebook_metadata_filter":"-all"}}' *.ipynb
 
 # %%
