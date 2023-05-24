@@ -5,13 +5,12 @@ Noise Covariances for Linear Time-Variant Systems"_](https://arxiv.org/pdf/2211.
 ## Prerequisites
 
 Python packages
-```
-numpy
-scipy
-matplotlib
-casadi
-cvxopt
-```
+
+- numpy
+- scipy
+- matplotlib
+- casadi
+- cvxopt
 
 
 # Description of the problem to solve
@@ -33,6 +32,13 @@ Note that also the time-varying behavior comes from the inputs $u_k$, which can 
 
 Finally, the matrix $C$ is fixed here (it would be possible to change that in the code without two many efforts however).
 
+Also, the paremeters are assumed to be in some set defined with inequality constraints:
+$$
+\begin{align}
+	\{ (\alpha, \beta) \in \mathbb{R}^{n_{\alpha}}\times \mathbb{R}^{n_{\beta}}  \; \big| \; h(\alpha, \beta) \geq 0 \},
+\end{align}
+$$
+(Note that the inequality is opposite sign of how it is in the paper).
 
 ## The Estimation
 
@@ -43,7 +49,7 @@ These are basically maximizing the performance of a Kalman filter on the trainin
 $$
 \begin{align}
 		&\underset{ \substack{
-				\alpha, \bm{e}, \bm{S},
+				\alpha, \beta, \bm{e}, \bm{S},
 				%				 \bm{M},
 				\bm{\hat{x}}, \bm{P}
 			}
@@ -56,9 +62,11 @@ $$
 		\\&\phantom{ \mathrm{s} \,}
 		e_k = y_k - C \hat{x}_k,
 		\\&\phantom{ \mathrm{s} \,}
-		\hat{x}_{k+1} = A(u_k; \alpha)\hat{x}_{k} + P_{k} \, C^{\top} S_k^{-1} e_k + b(u_k; \alpha), \nonumber
+		\hat{x}_{k+1} = A(u_k; \alpha)\big( \hat{x}_{k} + P_{k} \, C^{\top} S_k^{-1} e_k \big) + b(u_k; \alpha), \nonumber
 		\\&\phantom{ \mathrm{s} \,}
-		P_{k+1} = A(u_k; \alpha) \left(  P_k - P_k \, C^{\top} S^{-1} \, C \, P_k  \right) A(u_k; \alpha)^{\top} + Q(\beta) \nonumber
+		P_{k+1} = A(u_k; \alpha) \left(  P_k - P_k \, C^{\top} S^{-1} \, C \, P_k  \right) A(u_k; \alpha)^{\top} + Q(\beta) \nonumber,
+        \\&\phantom{ \mathrm{s} \,}
+        h(\alpha, \beta) \geq 0 \nonumber
 		%		\phi_k(\alpha, P_k, S_k),
 	\end{align}
 $$
@@ -76,7 +84,31 @@ The first of them is reffered as "MLE" because it corresponds to the Maximum-Lik
 
 # Description of the algorithms
 
-tbd
+## IPOPT
+One option is simply to call the solver IPOPT to solve the optimization problem (3) in this lifted form
+
+## SQP
+
+We propose a taylored SQP method.
+
+It is composed by several steps:
+
+- Propagate the state and covariances according to the Kalman filter equations to get $e_k$ and $S_k$.
+- Computing the derivatives
+    $\frac{\partial e_k}{\partial \alpha}$
+    $\frac{\partial e_k}{\partial \beta}$
+    $\frac{\partial S_k}{\partial \alpha}$
+    $\frac{\partial S_k}{\partial \beta}$.
+
+    This is done through "hand-made" forward AD.
+- Computing gradient and Hessian approximation. 
+   
+    The gradient is always computed exactly. For the Hessian, we make some approximation.
+    Regarding the "PredErr" method, we use Gauss-Newton Hessian approximation.
+    Regarding "MLE" method, we make a similar one, which falls into the framework of Generalized Gauss-Netwon Hessian approximation after omitting the second-derivative of the term $\log \det S$ (indeed, this term is concave in $S$, while the other term is convex in $(e, S)$).
+- Globalization via line-search. 
+  
+  Perform line-search in the direction found by backtracking until the Armijo condition is reached. 
 
 # How to use the package
 
