@@ -52,9 +52,8 @@ These are basically maximizing the performance of a Kalman filter on the trainin
 ```math
 \begin{align}
 		&\underset{ \substack{
-				\alpha, \beta, \bm{e}, \bm{S},
-				%				 \bm{M},
-				\bm{\hat{x}}, \bm{P}
+				\alpha, \beta, e, S,
+				\hat{x}}, P
 			}
 		}{\mathrm{minimize}} \; \sum_{k=0}^{N} e_k^\top \big(S_k\big)^{-1} e_k + \log \det S_k \nonumber \\
 		& \mathrm{subject}  \, \mathrm{to} \, \nonumber
