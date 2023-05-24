@@ -112,5 +112,5 @@ It is composed by several steps:
 
 # How to use the package
 
-tbd
+See the tutorial example in notebooks/pynotebooks/minimal_example.py
 
