@@ -11,6 +11,7 @@ default_opts = {"maxiter":50,
           "globalization.maxiter":20,
           "globalization.beta":0.8,
           "globalization.gamma":0.1,
+          "einsum": True,
           }
 
 class OPTKF:
@@ -82,10 +83,10 @@ class OPTKF:
         self.rtimes["prepare"] += time() - t0
 
     def complete_opts(self, opts):
-        opts = default_opts.copy()
+        options = default_opts.copy()
         for key, item in opts.items():
-            opts[key] = item
-        return opts
+            options[key] = item
+        return options
 
     def get_AbC(self, alpha):
         t0 = time()
@@ -144,8 +145,12 @@ class OPTKF:
             if k == self.N:
                 break
             L[k] = As[k] @ PC
-            P[k+1] = np.einsum("fx,xw,gw->fg",  As[k], P[k], As[k], optimize=False) \
-                - np.einsum("fy,yz,gz->fg",  L[k], M[k], L[k], optimize=False) + Q
+            if self.einsum:
+                P[k+1] = np.einsum("fx,xw,gw->fg",  As[k], P[k], As[k], optimize=False) \
+                    - np.einsum("fy,yz,gz->fg",  L[k], M[k], L[k], optimize=False) + Q
+            else:
+                P[k+1] = As[k] @ P[k] @ As[k].T - L[k] @ M[k] @ L[k].T + Q
+                
         matrices = {
                "S": S, "M": M, "L":L,
                "P":P, "logdetS": logdetS,
@@ -173,7 +178,11 @@ class OPTKF:
             if k == self.N:
                 break
             Pest[k] = P[k] - K[k] @ PC.T
-            P[k+1] = np.einsum("fx,xw,gw->fg",  As[k], Pest[k], As[k], optimize=False) + Q
+            if self.einsum:
+                P[k+1] = np.einsum("fx,xw,gw->fg",  As[k], Pest[k], As[k], optimize=False) + Q
+            else:
+                P[k+1] = As[k] @ Pest[k] @ As[k].T + Q
+                
         matrices = {
                "P":P, "Pest":Pest, "K":K, "M":M,
                "A" : As, "b": bs
@@ -236,36 +245,61 @@ class OPTKF:
         dQ, dR = self.get_dQR(beta)
         for k in range(self.N+1):
             xk, zk, Mk, C = states["x"][k], states["z"][k], matrices["M"][k], self.C
-            dS_dbeta = np.einsum("xwb,yx,zw->yzb", dP_dbeta, C, C, optimize=False) + dR
-            dM_dalpha[k] = symmetrize( -np.einsum("xwa,yx,zw,yv,uz->vua", dP_dalpha, C, C, Mk, Mk, optimize=False) )
-            dM_dbeta[k] = symmetrize( -np.einsum("yzb,yv,uz->vub", dS_dbeta, Mk, Mk, optimize=False) )
+            if self.einsum:
+                dS_dbeta = np.einsum("xwb,yx,zw->yzb", dP_dbeta, C, C, optimize=False) + dR
+                dM_dalpha[k] = -np.einsum("xwa,yx,zw,yv,uz->vua", dP_dalpha, C, C, Mk, Mk, optimize=False)
+                dM_dbeta[k] = -np.einsum("yzb,yv,uz->vub", dS_dbeta, Mk, Mk, optimize=False)
+                dz_dalpha[k] = np.einsum("wya,y->wa", dM_dalpha[k], C @xk - self.problem.ys[k], optimize=False) + Mk @ (C @ dx_dalpha)
+                dz_dbeta[k] = np.einsum("wya,y->wa", dM_dbeta[k], C @xk - self.problem.ys[k], optimize=False) + Mk @ (C @ dx_dbeta)
+            else:
+                dS_dalpha = np.tensordot(C, C @ dP_dalpha, axes=(1,0))
+                dS_dbeta = np.tensordot(C, C @ dP_dbeta, axes=(1,0)) + dR
+                dM_dalpha[k] = -np.tensordot(Mk, Mk @ dS_dalpha, axes=(1, 0))
+                dM_dbeta[k] = -np.tensordot(Mk, Mk @ dS_dbeta, axes=(1, 0))
+                dz_dalpha[k] = np.swapaxes(dM_dalpha[k], 1, 2) @ (C @ xk - self.problem.ys[k]) + Mk @ (C @ dx_dalpha)
+                dz_dbeta[k] = np.swapaxes(dM_dbeta[k], 1, 2) @ (C @ xk - self.problem.ys[k]) + Mk @ (C @ dx_dbeta)
 
-            dz_dalpha[k] = np.einsum("wya,y->wa", dM_dalpha[k], C @xk - self.problem.ys[k], optimize=False) \
-                        + Mk @ (C @ dx_dalpha)
-            dz_dbeta[k] = np.einsum("wyb,y->wb", dM_dbeta[k], C @xk - self.problem.ys[k], optimize=False) \
-                        + Mk @ (C @ dx_dbeta)
-
+            dM_dalpha[k] = symmetrize(dM_dalpha[k])
+            dM_dbeta[k] = symmetrize(dM_dbeta[k])
             if k == self.N:
                 break
             Pk, Lk, A = matrices["P"][k], matrices["L"][k], matrices["A"][k]
-            dL_dalpha = np.einsum("xwa,wv,yv->xya", dAs[k], Pk, C, optimize=False) \
-                + np.einsum("xw,wva,yv->xya", A, dP_dalpha, C, optimize=False)
-            dL_dbeta = np.einsum("xw,wvb,yv->xyb", A, dP_dbeta, C, optimize=False)
-            dx_dalpha = A @ dx_dalpha - Lk @ dz_dalpha[k] + dbs[k] \
-                + np.einsum("xwa,w->xa", dAs[k], xk, optimize=False) - np.einsum("xwa,w->xa", dL_dalpha, zk, optimize=False)
-            dx_dbeta = A @ dx_dbeta - Lk @ dz_dbeta[k] \
-                - np.einsum("xwa,w->xa", dL_dbeta, zk, optimize=False)
 
-            dP_dalpha = 2 * np.einsum("xwa,wv,uv->xua", dAs[k], Pk, A, optimize=False) \
-                + np.einsum("xw,wva,uv->xua", A, dP_dalpha, A, optimize=False) \
-                - 2 * np.einsum("xwa,wv,uv->xua", dL_dalpha, Mk, Lk, optimize=False) \
-                - np.einsum("xw,wva,uv->xua", Lk, dM_dalpha[k], Lk, optimize=False)
-            
+            if self.einsum:
+                dL_dalpha = np.einsum("xwa,wv,yv->xya", dAs[k], Pk, C, optimize=False) \
+                    + np.einsum("xw,wva,yv->xya", A, dP_dalpha, C, optimize=False)  
+                dL_dbeta = np.einsum("xw,wvb,yv->xyb", A, dP_dbeta, C, optimize=False)
+                dx_dalpha = A @ dx_dalpha - Lk @ dz_dalpha[k] + dbs[k] \
+                     + np.einsum("xwa,w->xa", dAs[k], xk, optimize=False) - np.einsum("xwa,w->xa", dL_dalpha, zk, optimize=False)
+                dx_dbeta = A @ dx_dbeta - Lk @ dz_dbeta[k] \
+                    - np.einsum("xwa,w->xa", dL_dbeta, zk, optimize=False)
+            else:
+                dL_dalpha = C @ (Pk.T @ dAs[k] + np.tensordot(A, dP_dalpha, axes=(1, 0)))
+                dL_dbeta = C @ np.tensordot(A, dP_dbeta, axes=(1, 0))
+                dx_dalpha = A @ dx_dalpha - Lk @ dz_dalpha[k] + dbs[k] \
+                    + np.swapaxes(dAs[k], 1, 2) @ xk - np.swapaxes(dL_dalpha, 1, 2) @ zk
+                dx_dbeta = A @ dx_dbeta - Lk @ dz_dbeta[k] \
+                    - np.swapaxes(dL_dbeta, 1, 2) @ zk
 
-            dP_dbeta = np.einsum("xw,wvb,uv->xub", A, dP_dbeta, A, optimize=False) \
-                - 2 * np.einsum("xwb,wv,uv->xub", dL_dbeta, Mk, Lk, optimize=False) \
-                - np.einsum("xw,wvb,uv->xub", Lk, dM_dbeta[k], Lk, optimize=False) \
-                + dQ
+            if self.einsum:
+                dP_dalpha = 2 * np.einsum("xwa,wv,uv->xua", dAs[k], Pk, A, optimize=False) \
+                    + np.einsum("xw,wva,uv->xua", A, dP_dalpha, A, optimize=False) \
+                    - 2 * np.einsum("xwa,wv,uv->xua", dL_dalpha, Mk, Lk, optimize=False) \
+                    - np.einsum("xw,wva,uv->xua", Lk, dM_dalpha[k], Lk, optimize=False)
+                dP_dbeta = np.einsum("xw,wvb,uv->xub", A, dP_dbeta, A, optimize=False) \
+                    - 2 * np.einsum("xwb,wv,uv->xub", dL_dbeta, Mk, Lk, optimize=False) \
+                    - np.einsum("xw,wvb,uv->xub", Lk, dM_dbeta[k], Lk, optimize=False) \
+                    + dQ
+            else:
+                dP_dalpha = np.tensordot(A, A @ dP_dalpha, axes=(1, 0)) \
+                    + 2 * np.tensordot(Pk @ A.T, dAs[k], axes=(0, 1)) \
+                    - 2 * np.tensordot(Mk @ Lk.T, dL_dalpha, axes=(0, 1)) \
+                    - np.tensordot(Lk, Lk @ dM_dalpha[k], axes=(1, 0))
+                dP_dbeta = np.tensordot(A, A @ dP_dbeta, axes=(1, 0)) \
+                    - 2 * np.tensordot(Mk @ Lk.T, dL_dbeta, axes=(0, 1)) \
+                    - np.tensordot(Lk, Lk @ dM_dbeta[k], axes=(1, 0)) \
+                    + dQ
+                
             dP_dalpha = symmetrize(dP_dalpha)
             dP_dbeta = symmetrize(dP_dbeta)
 
@@ -288,32 +322,48 @@ class OPTKF:
         dQ, dR = self.get_dQR(beta)
         for k in range(self.N+1):
             ek, Mk, C  = states["e"][k], matrices["M"][k], self.C
-            dS_dbeta = np.einsum("xwb,yx,zw->yzb", dP_dbeta, C, C, optimize=False) + dR
-            dM_dalpha = symmetrize( -np.einsum("xwa,yx,zw,yv,uz->vua", dP_dalpha, C, C, Mk, Mk, optimize=False) )
-            dM_dbeta = symmetrize( -np.einsum("yzb,yv,uz->vub", dS_dbeta, Mk, Mk, optimize=False) )
+            if self.einsum:
+                dS_dbeta = np.einsum("xwb,yx,zw->yzb", dP_dbeta, C, C, optimize=False) + dR
+                dM_dalpha = -np.einsum("xwa,yx,zw,yv,uz->vua", dP_dalpha, C, C, Mk, Mk, optimize=False)
+                dM_dbeta = -np.einsum("yzb,yv,uz->vub", dS_dbeta, Mk, Mk, optimize=False)
+            else:
+                dS_dalpha = np.tensordot(C, C @ dP_dalpha, axes=(1,0))
+                dS_dbeta = np.tensordot(C, C @ dP_dbeta, axes=(1,0)) + dR
+                dM_dalpha =-np.tensordot(Mk, Mk @ dS_dalpha, axes=(1, 0))
+                dM_dbeta = -np.tensordot(Mk, Mk @ dS_dbeta, axes=(1, 0))
+            dM_dalpha = symmetrize(dM_dalpha)
+            dM_dalpha = symmetrize(dM_dbeta)
             de_dalpha[k] = C @ dx_dalpha
             de_dbeta[k] = C @ dx_dbeta
             if k == self.N:
                 break
             xestk, Kk, Pk, Pestk, A = states["xest"][k], matrices["K"][k], matrices["P"][k], matrices["Pest"][k], matrices["A"][k]
-
-            dK_dalpha = np.einsum("xv,yv,yza->xza", Pk, C, dM_dalpha, optimize=False) \
-                + np.einsum("xva,yv,yz->xza", dP_dalpha, C, Mk, optimize=False) 
-            dK_dbeta = np.einsum("xv,yv,yzb->xzb", Pk, C, dM_dbeta, optimize=False) \
-                + np.einsum("xvb,yv,yz->xzb", dP_dbeta, C, Mk, optimize=False)
-
-            dxest_dalpha = dx_dalpha - Kk @ de_dalpha[k] - np.einsum("xwa,w->xa", dK_dalpha, ek, optimize=False)
-            dxest_dbeta = dx_dbeta - Kk @ de_dbeta[k] - np.einsum("xwb,w->xb", dK_dbeta, ek, optimize=False)
-
-            dx_dalpha = A @ dxest_dalpha + dbs[k] + np.einsum("xwa,w->xa", dAs[k], xestk, optimize=False) 
+            PC = Pk @ C.T
+            if self.einsum:
+                dK_dalpha = np.einsum("xv,yv,yza->xza", Pk, C, dM_dalpha, optimize=False) \
+                    + np.einsum("xva,yv,yz->xza", dP_dalpha, C, Mk, optimize=False)
+                dK_dbeta = np.einsum("xv,yv,yzb->xzb", Pk, C, dM_dbeta, optimize=False) \
+                    + np.einsum("xvb,yv,yz->xzb", dP_dbeta, C, Mk, optimize=False)
+                dxest_dalpha = dx_dalpha - Kk @ de_dalpha[k] - np.einsum("xwa,w->xa", dK_dalpha, ek, optimize=False)
+                dxest_dbeta = dx_dbeta - Kk @ de_dbeta[k] - np.einsum("xwb,w->xb", dK_dbeta, ek, optimize=False)
+                dx_dalpha = A @ dxest_dalpha + dbs[k] + np.einsum("xwa,w->xa", dAs[k], xestk, optimize=False)
+                dPest_dalpha = dP_dalpha - np.einsum("xy,yu,uva->xva", Kk, C, dP_dalpha) - np.einsum("xya,yu,uv->xva", dK_dalpha, C, Pk)
+                dPest_dbeta = dP_dbeta - np.einsum("xy,yu,uvb->xvb", Kk, C, dP_dbeta) - np.einsum("xyb,yu,uv->xvb", dK_dbeta, C, Pk)
+                dP_dalpha = np.einsum("xw,wva,uv->xua", A, dPest_dalpha, A, optimize=False) \
+                            + 2 * np.einsum("xwa,wv,uv->xua", dAs[k], Pestk, A, optimize=False)
+                dP_dbeta = np.einsum("xw,wvb,uv->xub", A, dPest_dbeta, A, optimize=False) + dQ
+            else:
+                dK_dalpha = np.tensordot(PC, dM_dalpha, axes=(1,0)) + (Mk @ C) @ dP_dalpha
+                dK_dbeta = np.tensordot(PC, dM_dbeta, axes=(1,0)) + (Mk @ C) @ dP_dbeta
+                dxest_dalpha = dx_dalpha - Kk @ de_dalpha[k] - np.swapaxes(dK_dalpha, 1, 2) @ ek
+                dxest_dbeta = dx_dbeta - Kk @ de_dbeta[k] -  np.swapaxes(dK_dbeta, 1, 2) @ ek
+                dx_dalpha = A @ dxest_dalpha + dbs[k] + np.swapaxes(dAs[k], 1, 2) @ xestk
+                dPest_dalpha = dP_dalpha - np.tensordot( Kk @ C, dP_dalpha, axes=(1,0)) -  PC @ dK_dalpha
+                dPest_dbeta = dP_dbeta - np.tensordot( Kk @ C, dP_dbeta, axes=(1,0)) -  PC @ dK_dbeta
+                dP_dalpha = np.tensordot(A, A @ dPest_dalpha, axes=(1, 0)) \
+                    + 2 * np.tensordot(Pestk @ A.T, dAs[k], axes=(0, 1))
+                dP_dbeta = np.tensordot(A, A @ dPest_dbeta, axes=(1, 0)) + dQ
             dx_dbeta = A @ dxest_dbeta
-
-            dPest_dalpha = dP_dalpha - np.einsum("xy,yu,uva->xva", Kk, C, dP_dalpha) - np.einsum("xya,yu,uv->xva", dK_dalpha, C, Pk)
-            dPest_dbeta = dP_dbeta - np.einsum("xy,yu,uvb->xvb", Kk, C, dP_dbeta) - np.einsum("xyb,yu,uv->xvb", dK_dbeta, C, Pk)
-
-            dP_dalpha = np.einsum("xw,wva,uv->xua", A, dPest_dalpha, A, optimize=False) \
-                        + 2 * np.einsum("xwa,wv,uv->xua", dAs[k], Pestk, A, optimize=False)
-            dP_dbeta = np.einsum("xw,wvb,uv->xub", A, dPest_dbeta, A, optimize=False) + dQ
 
             dP_dalpha = symmetrize(dP_dalpha)
             dP_dbeta = symmetrize(dP_dbeta)
@@ -345,8 +395,11 @@ class OPTKF:
     def cost_eval(self, states, matrices, alpha, beta, formulation):
         t0 = time()
         if formulation=="MLE":
-            value = np.einsum("kyz,ky,kz->", matrices["S"], states["z"], states["z"], optimize=False) \
-                + np.sum( matrices["logdetS"] )
+            if self.einsum:
+                value1 = np.einsum("kyz,ky,kz->", matrices["S"], states["z"], states["z"], optimize=False)
+            else:
+                value1 = np.sum(states["z"][:, np.newaxis] @ matrices["S"] @ states["z"][..., np.newaxis])
+            value = value1 + np.sum( matrices["logdetS"] )
         elif formulation=="PredErr":
             value = np.sum( states["e"]**2 )
         value = value + self.problem.L2pen * (np.sum( alpha**2 ) + np.sum(beta**2 ))
@@ -356,25 +409,42 @@ class OPTKF:
     def cost_derivatives(self, states, matrices, derivatives, formulation, new_hessian=True, neglect_logdet_hessian=True):
         t0 = time()
         if formulation=="MLE":
-            e =  np.einsum("kyz,kz->ky", matrices["S"], states["z"], optimize=False)
-            SdM = np.einsum("kyw,kwzp->kyzp", matrices["S"], derivatives["dM"], optimize=False)
-            dMe = np.einsum("kywp,kw->kyp", derivatives["dM"], e, optimize=False)
-            gradient = np.einsum("kzp,kz->p", 2*derivatives["dz"] - dMe, e, optimize=False) - np.trace(np.sum(SdM, axis=0))
-            h1 =  np.einsum( "kzp,kzy,kyq->pq", derivatives["dz"], matrices["S"], derivatives["dz"], optimize=False  )
+            if self.einsum:
+                e =  np.einsum("kyz,kz->ky", matrices["S"], states["z"], optimize=False)
+                SdM = np.einsum("kyw,kwzp->kyzp", matrices["S"], derivatives["dM"], optimize=False)
+                dMe = np.einsum("kywp,kw->kyp", derivatives["dM"], e, optimize=False)
+                gradient = np.einsum("kzp,kz->p", 2*derivatives["dz"] - dMe, e, optimize=False) - np.trace(np.sum(SdM, axis=0))
+                h1 =  np.einsum( "kzp,kzy,kyq->pq", derivatives["dz"], matrices["S"], derivatives["dz"], optimize=False  )
+            else:
+                e =  (matrices["S"] @ states["z"][..., np.newaxis])[..., 0]
+                SdM = np.transpose(matrices["S"][:, np.newaxis] @ np.transpose(derivatives["dM"], (0, 3, 1, 2)), (0, 2, 3, 1))
+                dMe = (e[:, np.newaxis, np.newaxis] @ derivatives["dM"])[:, :, 0]
+                gradient = np.sum((e[:, np.newaxis] @ (2*derivatives["dz"] - dMe))[:,0], axis=0) - np.trace(np.sum(SdM, axis=0))
+                h1 = np.sum(np.swapaxes(derivatives["dz"], 1, 2) @ matrices["S"] @ derivatives["dz"], axis=0)
+            
             if new_hessian:
                 h_quad = 2 * h1
             else:
-                h2 = np.einsum("kyp,kyw,kwq->pq", derivatives["dz"] - dMe, matrices["S"], derivatives["dz"] - dMe, optimize=False)
-                h3 = np.einsum( "kzp,kzy,kyq->pq", dMe, matrices["S"], dMe , optimize=False )
+                if self.einsum:
+                    h2 = np.einsum("kyp,kyw,kwq->pq", derivatives["dz"] - dMe, matrices["S"], derivatives["dz"] - dMe, optimize=False)
+                    h3 = np.einsum( "kzp,kzy,kyq->pq", dMe, matrices["S"], dMe , optimize=False )
+                else:
+                    dz_m_dMe = derivatives["dz"] - dMe
+                    h2 = np.sum(np.swapaxes(dz_m_dMe, 1, 2) @ matrices["S"] @ dz_m_dMe, axis=0)
+                    h3 = np.sum(np.swapaxes(dMe, 1, 2) @ matrices["S"] @ dMe, axis=0)
                 h_quad = h1 + h2 + h3
-            h_logdet = np.einsum("kyzp,kyzq->pq", SdM, SdM, optimize=False)
             if neglect_logdet_hessian:
                 hessian = h_quad
             else:
+                h_logdet = np.sum(np.swapaxes(SdM, -1, -2) @ SdM, axis=(0, 1))
                 hessian = h_quad + h_logdet
         elif formulation=="PredErr":
-            gradient =  2*np.einsum("kzp,kz->p",derivatives["de"], states["e"], optimize=False)
-            hessian = 2*np.einsum("kzp,kzq->pq", derivatives["de"], derivatives["de"], optimize=False)
+            if self.einsum:
+                gradient =  2*np.einsum("kzp,kz->p",derivatives["de"], states["e"], optimize=False)
+                hessian = 2*np.einsum("kzp,kzq->pq", derivatives["de"], derivatives["de"], optimize=False)
+            else:
+                gradient =  2 * np.tensordot(derivatives["de"], states["e"], axes=([0,1], [0,1])  )
+                hessian = 2 * np.tensordot(derivatives["de"], derivatives["de"], axes=([0,1], [0,1])  )
 
         self.rtimes["cost_derivatives"] += time() - t0
         return gradient, hessian
@@ -408,17 +478,18 @@ class OPTKF:
         if formulation not in ["MLE", "PredErr"]:
             raise ValueError("Formulation {} is unknown. Choose between 'MLE' or 'PredError'".format(formulation))
         t0 = time()
-        opts = self.complete_opts(opts)
+        options = self.complete_opts(opts)
+        self.einsum = options["einsum"]
         nalpha = self.model.nalpha
         alphaj = alpha0.copy()
         betaj = beta0.copy()
         states, matrices = self.kalman_simulate(alphaj, betaj, formulation)
         cost = self.cost_eval(states, matrices, alphaj, betaj, formulation)
         objective_scale = 1.
-        tol_direction = objective_scale * opts["tol.direction"]
+        tol_direction = objective_scale * options["tol.direction"]
         if path:
             alphas, betas = [], []
-        for j in range(opts["maxiter"]):
+        for j in range(options["maxiter"]):
             if path:
                 alphas.append(alphaj)
                 betas.append(betaj)
@@ -427,7 +498,7 @@ class OPTKF:
             derivatives = self.kalman_derivatives(alphaj, betaj, states, matrices, formulation)
             gradient, hessian = self.cost_derivatives(states, matrices, derivatives, formulation)
             ab = np.concatenate([alphaj, betaj])
-            hessian_ = hessian + 2*opts["pen_step"]* np.eye(len(ab))
+            hessian_ = hessian + 2*options["pen_step"]* np.eye(len(ab))
             grad0 = gradient - hessian_ @ ab
             hessian_ = hessian_ + 2*self.problem.L2pen * np.eye(len(ab))
             linconstr = self.make_lin_constr(alphaj, betaj)
@@ -441,7 +512,7 @@ class OPTKF:
                 print(f"beta {betaj}, betanext {beta_next}")
             kkt_error = self.eval_kkt_error(alphaj, betaj, gradient, multiplier)
             
-            if kkt_error < opts["tol.kkt"]:
+            if kkt_error < options["tol.kkt"]:
                 termination = "tol.kkt"
                 niter = j
                 break
@@ -458,13 +529,13 @@ class OPTKF:
             if verbose:
                 print(f"Iteration {j}, Current cost {cost:2e}, kkt error {kkt_error:2e}, direction {der:2e}")
             tau, new_cost, states, matrices = self.globalization(alphaj, betaj, alpha_next, beta_next, der, cost, formulation,
-                                            opts["globalization.maxiter"], opts["globalization.gamma"], opts["globalization.beta"],
+                                            options["globalization.maxiter"], options["globalization.gamma"], options["globalization.beta"],
                                             verbose=verbose)
             if states is None:
                 termination = "globalization.maxiter"
                 niter = j+1
                 break
-            if cost - new_cost < max(abs(cost),abs(new_cost)) * opts["rtol.cost_decrease"]:
+            if cost - new_cost < max(abs(cost),abs(new_cost)) * options["rtol.cost_decrease"]:
                 termination = "rtol.cost_decrease"
                 niter = j+1
                 break
@@ -473,8 +544,8 @@ class OPTKF:
             alphaj = (1 - tau) * alphaj + tau * alpha_next
             betaj = (1 - tau) * betaj + tau * beta_next
             cost = new_cost
-        if j == opts["maxiter"]-1:
-            niter = opts["maxiter"]
+        if j == options["maxiter"]-1:
+            niter = options["maxiter"]
             termination = "maxiter"
 
         if path:
@@ -510,7 +581,13 @@ class OPTKF:
             states, matrices = states_and_matrices
         dimension = (self.N+1) * self.model.ny
         if formulation=="MLE":
-            lamb = np.einsum("kyz,ky,kz->", matrices["S"], states["z"], states["z"])  / dimension
+            if self.einsum:
+                lamb = np.einsum("kyz,ky,kz->", matrices["S"], states["z"], states["z"])  / dimension
+            else:
+                lamb = np.sum(states["z"][:, np.newaxis] @ matrices["S"] @ states["z"][..., np.newaxis]) / dimension
         elif formulation=="PredErr":
-            lamb =  np.einsum("kyz,ky,kz->", matrices["M"], states["e"], states["e"]) / dimension
+            if self.einsum:
+                lamb = np.einsum("kyz,ky,kz->", matrices["M"], states["e"], states["e"]) / dimension
+            else:
+                lamb = np.sum(states["e"][:, np.newaxis] @ matrices["M"] @ states["e"][..., np.newaxis]) / dimension
         return lamb
