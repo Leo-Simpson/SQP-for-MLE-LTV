@@ -32,14 +32,12 @@ class OPTKF:
             "kalman_simulate_matrices":0.,
             "kalman_simulate_states":0.,
             "prepare":0.,
-            "kalman_derivatives":0.,
             "cost_eval":0.,
             "cost_derivatives":0.,
             "QP":0.,
             "get_AbC":0.,
             "get_dAb":0.,
             "get_dQR":0.,
-            "prepare_ein_opt":0.,
             "total":0.
             }
 
@@ -231,9 +229,7 @@ class OPTKF:
             states = self.kalman_simulate_states_PredErr(matrices)
         return states, matrices
   
-    def kalman_derivatives_MLE(self, alpha, beta, states, matrices):
-        t0 = time()
-        # ab is the concatenation (alpha, beta)
+    def cost_derivatives_MLE(self,  states, matrices, alpha, beta, neglect_logdet_hessian=True):
         dz_dalpha = np.empty((self.N+1, self.model.ny, self.model.nalpha))
         dz_dbeta = np.empty((self.N+1, self.model.ny, self.model.nbeta))
         dM_dalpha = np.empty((self.N+1, self.model.ny, self.model.ny, self.model.nalpha))
@@ -273,15 +269,6 @@ class OPTKF:
                      + np.einsum("xwa,w->xa", dAs[k], xk, optimize=False) - np.einsum("xwa,w->xa", dL_dalpha, zk, optimize=False)
                 dx_dbeta = A @ dx_dbeta - Lk @ dz_dbeta[k] \
                     - np.einsum("xwa,w->xa", dL_dbeta, zk, optimize=False)
-            else:
-                dL_dalpha = C @ (Pk.T @ dAs[k] + np.tensordot(A, dP_dalpha, axes=(1, 0)))
-                dL_dbeta = C @ np.tensordot(A, dP_dbeta, axes=(1, 0))
-                dx_dalpha = A @ dx_dalpha - Lk @ dz_dalpha[k] + dbs[k] \
-                    + np.swapaxes(dAs[k], 1, 2) @ xk - np.swapaxes(dL_dalpha, 1, 2) @ zk
-                dx_dbeta = A @ dx_dbeta - Lk @ dz_dbeta[k] \
-                    - np.swapaxes(dL_dbeta, 1, 2) @ zk
-
-            if self.einsum:
                 dP_dalpha = 2 * np.einsum("xwa,wv,uv->xua", dAs[k], Pk, A, optimize=False) \
                     + np.einsum("xw,wva,uv->xua", A, dP_dalpha, A, optimize=False) \
                     - 2 * np.einsum("xwa,wv,uv->xua", dL_dalpha, Mk, Lk, optimize=False) \
@@ -291,6 +278,12 @@ class OPTKF:
                     - np.einsum("xw,wvb,uv->xub", Lk, dM_dbeta[k], Lk, optimize=False) \
                     + dQ
             else:
+                dL_dalpha = C @ (Pk.T @ dAs[k] + np.tensordot(A, dP_dalpha, axes=(1, 0)))
+                dL_dbeta = C @ np.tensordot(A, dP_dbeta, axes=(1, 0))
+                dx_dalpha = A @ dx_dalpha - Lk @ dz_dalpha[k] + dbs[k] \
+                    + np.swapaxes(dAs[k], 1, 2) @ xk - np.swapaxes(dL_dalpha, 1, 2) @ zk
+                dx_dbeta = A @ dx_dbeta - Lk @ dz_dbeta[k] \
+                    - np.swapaxes(dL_dbeta, 1, 2) @ zk
                 dP_dalpha = np.tensordot(A, A @ dP_dalpha, axes=(1, 0)) \
                     + 2 * np.tensordot(Pk @ A.T, dAs[k], axes=(0, 1)) \
                     - 2 * np.tensordot(Mk @ Lk.T, dL_dalpha, axes=(0, 1)) \
@@ -299,20 +292,31 @@ class OPTKF:
                     - 2 * np.tensordot(Mk @ Lk.T, dL_dbeta, axes=(0, 1)) \
                     - np.tensordot(Lk, Lk @ dM_dbeta[k], axes=(1, 0)) \
                     + dQ
-                
             dP_dalpha = symmetrize(dP_dalpha)
             dP_dbeta = symmetrize(dP_dbeta)
 
         dz_dab = np.concatenate([dz_dalpha, dz_dbeta], axis=-1)
         dM_dab = np.concatenate([dM_dalpha, dM_dbeta], axis=-1)
-        derivatives = {"dz" : dz_dab, "dM" : dM_dab}
         self.delete_unecessary(states, matrices, "MLE")
-        self.rtimes["kalman_derivatives"] += time() - t0
-        return derivatives
+        if self.einsum:
+            e =  np.einsum("kyz,kz->ky", matrices["S"], states["z"], optimize=False)
+            SdM = np.einsum("kyw,kwzp->kyzp", matrices["S"], dM_dab, optimize=False)
+            dMe = np.einsum("kywp,kw->kyp", dM_dab, e, optimize=False)
+            gradient = np.einsum("kzp,kz->p", 2*dz_dab - dMe, e, optimize=False) - np.trace(np.sum(SdM, axis=0))
+            hessian =  np.einsum( "kzp,kzy,kyq->pq", dz_dab, matrices["S"], dz_dab, optimize=False  )
+            if not neglect_logdet_hessian:
+                hessian = hessian + np.einsum("kyzp,kyzq->pq", SdM, SdM, optimize=False)
+        else:
+            e =  (matrices["S"] @ states["z"][..., np.newaxis])[..., 0]
+            SdM = np.transpose(matrices["S"][:, np.newaxis] @ np.transpose(dM_dab, (0, 3, 1, 2)), (0, 2, 3, 1))
+            dMe = (e[:, np.newaxis, np.newaxis] @ dM_dab)[:, :, 0]
+            gradient = np.sum((e[:, np.newaxis] @ (2*dz_dab - dMe))[:,0], axis=0) - np.trace(np.sum(SdM, axis=0))
+            hessian = np.sum(np.swapaxes(dz_dab, 1, 2) @ matrices["S"] @ dz_dab, axis=0)
+            if not neglect_logdet_hessian:
+                hessian = hessian + np.sum(np.swapaxes(SdM, -1, -2) @ SdM, axis=(0, 1))
+        return gradient, hessian
 
-    def kalman_derivatives_PredErr(self, alpha, beta, states, matrices):
-        t0 = time()
-        # ab is the concatenation (alpha, beta)
+    def cost_derivatives_PredErr(self, states, matrices, alpha, beta):
         de_dalpha = np.empty((self.N+1, self.model.ny, self.model.nalpha))
         de_dbeta = np.empty((self.N+1, self.model.ny, self.model.nbeta))
 
@@ -369,16 +373,14 @@ class OPTKF:
             dP_dbeta = symmetrize(dP_dbeta)
 
         de_dab = np.concatenate([de_dalpha, de_dbeta], axis=-1)
-        derivatives = {"de" : de_dab}
+        if self.einsum:
+            gradient =  2*np.einsum("kzp,kz->p",de_dab, de_dab, optimize=False)
+            hessian = 2*np.einsum("kzp,kzq->pq", de_dab, de_dab, optimize=False)
+        else:
+            gradient =  2 * np.tensordot(de_dab, states["e"], axes=([0,1], [0,1])  )
+            hessian = 2 * np.tensordot(de_dab, de_dab, axes=([0,1], [0,1])  )
         self.delete_unecessary(states, matrices, "PredErr")
-        self.rtimes["kalman_derivatives"] += time() - t0
-        return derivatives
-
-    def kalman_derivatives(self, alpha, beta, states, matrices, formulation):
-        if formulation=="MLE":
-            return self.kalman_derivatives_MLE(alpha, beta, states, matrices)
-        elif formulation=="PredErr":
-            return self.kalman_derivatives_PredErr(alpha, beta, states, matrices)
+        return gradient, hessian
             
     def delete_unecessary(self, states, matrices, formulation):
         del states["x"]
@@ -406,46 +408,12 @@ class OPTKF:
         self.rtimes["cost_eval"] += time() - t0
         return value
 
-    def cost_derivatives(self, states, matrices, derivatives, formulation, new_hessian=True, neglect_logdet_hessian=True):
+    def cost_derivatives(self, states, matrices, alpha, beta, formulation, neglect_logdet_hessian=True):
         t0 = time()
         if formulation=="MLE":
-            if self.einsum:
-                e =  np.einsum("kyz,kz->ky", matrices["S"], states["z"], optimize=False)
-                SdM = np.einsum("kyw,kwzp->kyzp", matrices["S"], derivatives["dM"], optimize=False)
-                dMe = np.einsum("kywp,kw->kyp", derivatives["dM"], e, optimize=False)
-                gradient = np.einsum("kzp,kz->p", 2*derivatives["dz"] - dMe, e, optimize=False) - np.trace(np.sum(SdM, axis=0))
-                h1 =  np.einsum( "kzp,kzy,kyq->pq", derivatives["dz"], matrices["S"], derivatives["dz"], optimize=False  )
-            else:
-                e =  (matrices["S"] @ states["z"][..., np.newaxis])[..., 0]
-                SdM = np.transpose(matrices["S"][:, np.newaxis] @ np.transpose(derivatives["dM"], (0, 3, 1, 2)), (0, 2, 3, 1))
-                dMe = (e[:, np.newaxis, np.newaxis] @ derivatives["dM"])[:, :, 0]
-                gradient = np.sum((e[:, np.newaxis] @ (2*derivatives["dz"] - dMe))[:,0], axis=0) - np.trace(np.sum(SdM, axis=0))
-                h1 = np.sum(np.swapaxes(derivatives["dz"], 1, 2) @ matrices["S"] @ derivatives["dz"], axis=0)
-            
-            if new_hessian:
-                h_quad = 2 * h1
-            else:
-                if self.einsum:
-                    h2 = np.einsum("kyp,kyw,kwq->pq", derivatives["dz"] - dMe, matrices["S"], derivatives["dz"] - dMe, optimize=False)
-                    h3 = np.einsum( "kzp,kzy,kyq->pq", dMe, matrices["S"], dMe , optimize=False )
-                else:
-                    dz_m_dMe = derivatives["dz"] - dMe
-                    h2 = np.sum(np.swapaxes(dz_m_dMe, 1, 2) @ matrices["S"] @ dz_m_dMe, axis=0)
-                    h3 = np.sum(np.swapaxes(dMe, 1, 2) @ matrices["S"] @ dMe, axis=0)
-                h_quad = h1 + h2 + h3
-            if neglect_logdet_hessian:
-                hessian = h_quad
-            else:
-                h_logdet = np.sum(np.swapaxes(SdM, -1, -2) @ SdM, axis=(0, 1))
-                hessian = h_quad + h_logdet
+            gradient, hessian = self.cost_derivatives_MLE(states, matrices, alpha, beta, neglect_logdet_hessian=neglect_logdet_hessian)
         elif formulation=="PredErr":
-            if self.einsum:
-                gradient =  2*np.einsum("kzp,kz->p",derivatives["de"], states["e"], optimize=False)
-                hessian = 2*np.einsum("kzp,kzq->pq", derivatives["de"], derivatives["de"], optimize=False)
-            else:
-                gradient =  2 * np.tensordot(derivatives["de"], states["e"], axes=([0,1], [0,1])  )
-                hessian = 2 * np.tensordot(derivatives["de"], derivatives["de"], axes=([0,1], [0,1])  )
-
+            gradient, hessian = self.cost_derivatives_PredErr(states, matrices, alpha, beta)
         self.rtimes["cost_derivatives"] += time() - t0
         return gradient, hessian
 
@@ -495,8 +463,7 @@ class OPTKF:
                 betas.append(betaj)
             if (formulation=="MLE") and rescale:
                 betaj = betaj * self.scale(alphaj, betaj, formulation, states_and_matrices=(states, matrices))
-            derivatives = self.kalman_derivatives(alphaj, betaj, states, matrices, formulation)
-            gradient, hessian = self.cost_derivatives(states, matrices, derivatives, formulation)
+            gradient, hessian = self.cost_derivatives(states, matrices, alphaj, betaj, formulation)
             ab = np.concatenate([alphaj, betaj])
             hessian_ = hessian + 2*options["pen_step"]* np.eye(len(ab))
             grad0 = gradient - hessian_ @ ab
