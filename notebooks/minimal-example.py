@@ -134,7 +134,7 @@ alpha0 = rng.random(model.nalpha)* alpha_max
 formulation = "MLE" # can be "MLE", "PredErr"
 algorithm = "SQP" # can be "SQP" or "IPOPT"
 
-opts = {"pen_step":1e-4, "maxiter":20, "tol.direction":0., "tol.kkt":1e-8} # parameters of the SQP method
+opts = {"pen_step":1e-4, "maxiter":20, "tol.direction":0., "tol.kkt":1e-8, "einsum":True} # parameters of the SQP method
 # opts = {} # parameters of IPOPT (here, only default parameters)
 
 # %%
@@ -147,6 +147,9 @@ print("running time : {:.2e}  status : {}".format(rtime, stats["return_status"])
 # %%
 print( alpha_true, alpha_found)
 print(beta_true, beta_found)
+
+# %%
+stats["rtimes"]
 
 # %% [markdown]
 # ### Validation on out-of-sample data 

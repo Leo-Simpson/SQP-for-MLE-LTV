@@ -129,12 +129,14 @@ res = {}
 
 alpha0 = np.ones(model.nalpha) * 0.2
 beta0 = np.ones(model.nbeta) * 0.2
-for algorithm in ["IPOPT", "SQP"]:
+for algorithm, einsum in [("SQP", True), ("SQP", False), ("IPOPT", None)]: # the second element is wether we use einsum or not
     infos = {}
     for N in Ns:
-        print("Algorithm : {}, N = {}".format(algorithm, N))
+        name_algo = algorithm + " with einsum = " + str(einsum)
+        print("Algorithm : {}, N = {}".format(name_algo, N))
         problemTrain.cut(N)
         t0 = time()
+        dict_opts[algorithm]["einsum"] = einsum
         alpha, beta, stats = problemTrain.solve(alpha0, beta0,
                                                 formulation, algorithm,
                                                 opts=dict_opts[algorithm], verbose=False)
@@ -164,11 +166,11 @@ for algorithm in ["IPOPT", "SQP"]:
         alpha0 = alpha.copy() # for making faster, to remove
         beta0 = beta.copy()
         
-    res[algorithm] = infos
+    res[name_algo] = infos
 
 # %%
-for algorithm, infos in res.items():
-    print("solution for", algorithm)
+for name_algo, infos in res.items():
+    print("solution for", name_algo)
     for N, info in infos.items():
         print("N = {}".format(N))
         print("Running time : {:.2e}".format(info["rtime"]))
@@ -184,9 +186,7 @@ for algorithm, infos in res.items():
 
 # %%
 fig = plot_res(res, "rtime", scale="lin")
-
-# %%
-fig = plot_res(res, "rtime-per-iter", scale="lin")
+# fig = plot_res(res, "rtime-per-iter", scale="lin")
 
 # %%
 fig = plot_res(res, "error_alpha")
