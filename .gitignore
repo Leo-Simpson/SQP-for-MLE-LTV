@@ -3,6 +3,7 @@ notebooks/pynotebooks/.ipynb_checkpoints/
 *.ipynb
 notebooks/.DS_store
 notebooks/__pycache*
+notebooks/test.*
 .DS_Store
 .python-version
 src/__pycache*

@@ -23,7 +23,7 @@ def latexify():
     matplotlib.rcParams.update(params)
 
 def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabels=None, legend=True, xlabel="time (sec)",
-                ylabel="", legend_order=None, ax4legend=None, u_other_scale=None, figsize=(8, 4)
+                ylabel="", legend_order=None, ax4legend=None, u_other_scale=None, figsize=(8, 4), title=None
 ):
     
     if ax is None:
@@ -38,6 +38,8 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
         else:
             fig, ax = plt.subplots(figsize=figsize)
         new_fig = True
+        if title is not None:
+            fig.suptitle(title)
     else:
         new_fig = False
 
@@ -49,14 +51,15 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
         nu = us.shape[1]
         if ulabels is None:
             ulabels = [r"$u_{"+str(j+1)+r", k}$" for j in range(nu)]
+        if u_other_scale is not None:
+            axu = ax.twinx()
         for j in range(nu):
             ax_ = ax
-            if u_other_scale is not None and u_other_scale == j:
-                ax2 = ax.twinx()
-                ax2.set_ylim(-0.2, 2.)
-                ax2.set_yticks([0., 1.], color=colors_u[j])
-                ax2.set_ylabel(r"Valve position $u_{2}$", color=colors_u[j])
-                ax_ = ax2
+            if u_other_scale is not None and j in u_other_scale:
+                # ax2.set_ylim(-0.2, 2.)
+                # ax2.set_yticks([0., 1.], color=colors_u[j])
+                # ax2.set_ylabel(r"Valve position $u_{2}$", color=colors_u[j])
+                ax_ = axu
             ax_.plot(ts[:N], us[:, j], char, label=ulabels[j], alpha=alpha_u, color=colors_u[j])
     for i in range(ny):
         alphay = 1 #  / (i+1)
@@ -70,7 +73,7 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
 
     h, l = ax.get_legend_handles_labels()
     if u_other_scale is not None:
-        h_v, l_v  = ax2.get_legend_handles_labels()
+        h_v, l_v  = axu.get_legend_handles_labels()
         h = [ h_v[0] ] +  h
         l = [ l_v[0] ] +  l
     if legend_order is not None:
@@ -80,21 +83,25 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
     if legend:
         if ax4legend is None:
             ax4legend = ax
-            box = (1, 1)
+            box = (1.1, 0.5)
         else:
-            box = (1, 0.5)
+            box = (1.1, 0.5)
         ax4legend.legend(h, l, loc='center left', bbox_to_anchor=box)
 
     if new_fig:
+        fig.tight_layout()
         return fig
 
 def plot_est(us, ys, yest, dt=1.,
-    pred=None, ys_true=None, Spred=None, char="-", alpha_u=1., ax=None, legend=True,
+    u_other_scale=None, alpha_u=1., title=None,
+    pred=None, ys_true=None, Spred=None, char="-", ax=None, legend=True,
     nstd=2, legend_order=None, ax4legend=None, figsize=(8, 4)
     ):
     if ax is None:
         fig, ax = plt.subplots(1, figsize=figsize)
         new_fig = True
+        if title is not None:
+            fig.suptitle(title)
     else:
         new_fig = False
 
@@ -105,8 +112,13 @@ def plot_est(us, ys, yest, dt=1.,
     ts = np.arange(N+1)
     if us is not None:
         nu = us.shape[1]
+        if u_other_scale is not None:
+            axu = ax.twinx()
         for j in range(nu):
-            ax.plot(ts[:N], us[:, j], char, label=r"$u^{}_k$".format(j+1), alpha=alpha_u, color=colors_u[j])
+            ax_ = ax
+            if u_other_scale is not None and j in u_other_scale:
+                ax_ = axu
+            ax_.plot(ts[:N], us[:, j], char, label=r"$u^{}_k$".format(j+1), alpha=alpha_u, color=colors_u[j])
     
     if pred is not None:
         tspred, yspred = pred
@@ -153,6 +165,10 @@ def plot_est(us, ys, yest, dt=1.,
     ax.set_xlabel('Time (sec)')
     ax.grid()
     h, l = ax.get_legend_handles_labels()
+    if u_other_scale is not None:
+        h_v, l_v  = axu.get_legend_handles_labels()
+        h = [ h_v[0] ] +  h
+        l = [ l_v[0] ] +  l
     if legend_order is None:
         h_, l_ = h, l
     else:
@@ -162,7 +178,7 @@ def plot_est(us, ys, yest, dt=1.,
     if legend:
         if ax4legend is None:
             ax4legend = ax
-            box = (1, 0.5)
+            box = (1.1, 0.5)
         else:
             box = (1, 0.5)
         ax4legend.legend(h_, l_, loc='center left', bbox_to_anchor=box)
