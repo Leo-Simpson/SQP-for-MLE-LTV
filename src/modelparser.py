@@ -272,17 +272,18 @@ class ProblemParser:
         # print("error prediction = {:.2e}".format(error / len(y_preds)))
         return error / len(y_preds)
 
-    def value(self, alpha, beta):
+    def value(self, alpha, beta, formulation="MLE"):
         _, _, xs, Ps, _, innovs = self.kalman(alpha, beta, save_pred=True)
-        error, logdet = 0., 0.
+        val = 0.
         Q, R = self.model.get_QR(beta)
         for i in range(self.N+1):
             C = self.model.G.jacobian()(xs[i], 0).full()
             S = C @ Ps[i] @ C.T + R
-            M = np.linalg.inv(S)
-            error = error + (M @ innovs[i]) @ innovs[i]
-            logdet = logdet + np.log( np.linalg.det(S)  )
-        val = error + logdet
+            if formulation == "MLE":
+                st_cost = (np.linalg.inv(S) @ innovs[i]) @ innovs[i] + np.log( np.linalg.det(S)  )
+            elif formulation == "PredErr":
+                st_cost = innovs[i] @ innovs[i]
+            val = val + st_cost
         return val
 
     def solve(self, alpha0, beta0, formulation, algorithm, opts={}, verbose=False, rescale=False):
