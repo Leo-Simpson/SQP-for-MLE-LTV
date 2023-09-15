@@ -133,12 +133,17 @@ alpha0 = rng.random(model.nalpha)* alpha_max
 # %%
 formulation = "MLE" # can be "MLE", "PredErr"
 algorithm = "SQP" # can be "SQP" or "IPOPT"
+algorithm = "IPOPT" # can be "SQP" or "IPOPT"
 
 opts = {"pen_step":1e-4, "maxiter":20, "tol.direction":0., "tol.kkt":1e-8, "einsum":True} # parameters of the SQP method
 # opts = {} # parameters of IPOPT (here, only default parameters)
+opts = {"pen_step":1e-4, "maxiter":20, "tol.direction":0., "tol.kkt":1e-8, "einsum":False} # parameters of the SQP method
+
+# %%
 
 # %%
 t0 = time()
+
 alpha_found, beta_found, stats = problemTrain.solve(alpha0, beta0,
                                                     formulation, algorithm, opts=opts, verbose=False)
 rtime = time() - t0

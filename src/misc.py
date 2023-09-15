@@ -96,3 +96,13 @@ def tri2sym(m, inds):
 
 def l1(x):
     return abs(x).sum()
+
+def select_jac(A, nx):
+    # function to take only the jacobian w.r.t. the first variable after using jacobian()
+    casadi_version = ca.__version__
+    if casadi_version[:3] == "3.5":
+        return A[:, :nx]
+    elif casadi_version[:3] == "3.6":
+        return A[0]
+    else:
+        raise ValueError(f"Unknown casadi version {casadi_version}")

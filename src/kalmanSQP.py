@@ -48,30 +48,31 @@ class OPTKF:
         self.rtimes["linearized_fn"] += time() - t0
             
     def make_constr(self, eqconstr=True):
-        self.derconstraints = self.model.Ineq.jacobian()
-        # equality constraint, only used in PredErr to remove one degree of freedom on beta
         alpha = ca.SX.sym("alpha_sym", self.model.nalpha)
         beta = ca.SX.sym("beta_sym", self.model.nbeta)
+        ab = ca.vertcat(alpha, beta)
+        # inequality constraints are user defined
+        self.ineqconstraints = ca.Function("ineqcstr", [ab], [self.model.Ineq(alpha, beta)])
+        self.derineqconstraints = self.ineqconstraints.jacobian()
+        # equality constraint, only used in PredErr to remove one degree of freedom on beta
         Q, R = self.model.get_QR(beta)
         eq = ca.trace(Q) + ca.trace(R) - 1.
         if eqconstr:
-            self.eqconstr = ca.Function("eqcstr", [alpha, beta], [eq])
+            self.eqconstr = ca.Function("eqcstr", [ab], [eq])
             self.dereqconstraints = self.eqconstr.jacobian()
         else:
             self.eqconstr = None
 
-    def make_lin_constr(self, alpha, beta):
-        ab = np.concatenate([alpha, beta])
-        Gconstr = - self.derconstraints(alpha, beta, 0).full()
-        hconstr = self.model.Ineq(alpha, beta).full().squeeze() + Gconstr @ ab
+    def make_lin_constr(self, ab):
+        Gconstr = - self.derineqconstraints(ab, 0).full()
+        hconstr = self.ineqconstraints(ab).full().squeeze() + Gconstr @ ab
         return Gconstr, hconstr
 
-    def make_lin_eqconstr(self, alpha, beta):
+    def make_lin_eqconstr(self, ab):
         if self.eqconstr is None:
             return None
-        ab = np.concatenate([alpha, beta])
-        Aconstr = -self.dereqconstraints(alpha, beta, 0).full()
-        bconstr = self.eqconstr(alpha, beta).full().squeeze() + Aconstr @ ab
+        Aconstr = -self.dereqconstraints(ab, 0).full()
+        bconstr = self.eqconstr(ab).full().squeeze() + Aconstr @ ab
         return Aconstr, bconstr
 
     def prepare(self):
@@ -374,7 +375,7 @@ class OPTKF:
 
         de_dab = np.concatenate([de_dalpha, de_dbeta], axis=-1)
         if self.einsum:
-            gradient =  2*np.einsum("kzp,kz->p",de_dab, de_dab, optimize=False)
+            gradient =  2*np.einsum("kzp,kz->p",de_dab, states["e"], optimize=False)
             hessian = 2*np.einsum("kzp,kzq->pq", de_dab, de_dab, optimize=False)
         else:
             gradient =  2 * np.tensordot(de_dab, states["e"], axes=([0,1], [0,1])  )
@@ -417,8 +418,8 @@ class OPTKF:
         self.rtimes["cost_derivatives"] += time() - t0
         return gradient, hessian
 
-    def eval_kkt_error(self, alpha, beta, gradient, multiplier):
-        kkt_error =  gradient + self.derconstraints(alpha, beta, 0).full().T @ multiplier
+    def eval_kkt_error(self, ab, gradient, multiplier):
+        kkt_error =  gradient + self.derineqconstraints(ab, 0).full().T @ multiplier
         return np.sum( abs(kkt_error))
 
     def solveQP(self, Q, p, constr, eqconstr, x_start):
@@ -468,16 +469,13 @@ class OPTKF:
             hessian_ = hessian + 2*options["pen_step"]* np.eye(len(ab))
             grad0 = gradient - hessian_ @ ab
             hessian_ = hessian_ + 2*self.problem.L2pen * np.eye(len(ab))
-            linconstr = self.make_lin_constr(alphaj, betaj)
-            if formulation == "PredErr":
-                lin_eqconstr = self.make_lin_eqconstr(alphaj, betaj)
-            elif formulation == "MLE":
-                lin_eqconstr = None
+            linconstr = self.make_lin_constr(ab)
+            lin_eqconstr = self.make_lin_eqconstr(ab)
             ab_next, multiplier, der = self.solveQP(hessian_, grad0, linconstr, lin_eqconstr, ab)
             alpha_next, beta_next = ab_next[:nalpha], ab_next[nalpha:]
             if np.any(beta_next<0.):
                 print(f"beta {betaj}, betanext {beta_next}")
-            kkt_error = self.eval_kkt_error(alphaj, betaj, gradient, multiplier)
+            kkt_error = self.eval_kkt_error(ab, gradient, multiplier)
             
             if kkt_error < options["tol.kkt"]:
                 termination = "tol.kkt"

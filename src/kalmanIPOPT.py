@@ -1,7 +1,7 @@
 import casadi as ca  # type: ignore
 import numpy as np  # type: ignore
 import numpy.linalg as LA  # type: ignore
-from .misc import sym2vec, vec2sym
+from .misc import sym2vec, vec2sym, select_jac
 
 
 class NLP:
@@ -131,7 +131,8 @@ def nlp_kalman(problem, alpha0, beta0, formulation):
         return S
 
     def update(x, P, Q, S, a, u, y, M=None):
-        A = Afn(x, u, a, 0)[:, :model.nx]
+        A_ = Afn(x, u, a, 0)
+        A = select_jac(A_, model.nx)
         if M is None:
             M = ca.inv(S)
         K = P @ C.T @ M

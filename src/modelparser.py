@@ -5,7 +5,7 @@ import contextlib
 from math import ceil
 from numpy.linalg import norm # type: ignore
 from scipy.linalg import sqrtm # type: ignore
-from .misc import symmetrize
+from .misc import symmetrize, select_jac
 
 class ModelParser:
     def __init__(self, Fdiscr, G, Q_fn, R_fn):
@@ -31,7 +31,8 @@ class ModelParser:
         return C @ (P @ C.T) + R
     
     def propP(self, P, u, alpha, Q):
-        A = self.Fdiscr.jacobian()(np.zeros(self.nx), u, alpha, 0).full()[:, :self.nx]
+        A_ = self.Fdiscr.jacobian()(np.zeros(self.nx), u, alpha, 0)
+        A = select_jac(A_, self.nx).full()
         P_next = A @ P @ A.T + Q
         return symmetrize(P_next)
 
@@ -208,6 +209,7 @@ class ProblemParser:
         Q, R = self.model.get_QR(beta)
         Q = Q.full()
         R = R.full()
+        dF = self.model.Fdiscr.jacobian()
         for k in range(self.N+1):
             C = self.model.G.jacobian()(x_pred, 0).full()
             M = LA.inv(C @ P_pred @ C.T + R)
@@ -223,7 +225,7 @@ class ProblemParser:
 
             if k < self.N:
                 x_pred = self.model.Fdiscr(x_est, self.us[k], alpha).full().squeeze()
-                A = self.model.Fdiscr.jacobian()(x_est, self.us[k], alpha, 0).full()[:, :self.nx]
+                A = select_jac( dF(x_est, self.us[k], alpha, 0), self.model.nx).full()
                 P_pred = A @ P_est @ A.T + Q
                 # print(k, (M @ innov).T @ innov - np.log(LA.det(M)))  # printing
                 if save_pred:
@@ -328,8 +330,9 @@ class ProblemParser:
         alpha = ca.SX.sym("alpha temp", self.model.nalpha)
         A_syms, b_syms = [], []
         dA_syms, db_syms = [], []
+        dF = self.model.Fdiscr.jacobian()
         for k in range(self.N):
-            A = self.model.Fdiscr.jacobian()(xzero, self.us[k], alpha, 0)[:, :self.model.nx]
+            A = select_jac( dF(xzero, self.us[k], alpha, 0), self.model.nx)
             dA = ca.jacobian(A, alpha)
             A_syms.append(A)
             dA_syms.append(dA)
