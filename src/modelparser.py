@@ -288,7 +288,9 @@ class ProblemParser:
             val = val + st_cost
         return val
 
-    def solve(self, alpha0, beta0, formulation, algorithm, opts={}, verbose=False, rescale=False):
+    def solve(self, alpha0, beta0, formulation, algorithm, opts={}, verbose=False, rescale=None):
+        if rescale is None:
+            rescale = (formulation == "PredErr")
         if algorithm == "SQP":
                 from .kalmanSQP import OPTKF
                 optkalman = OPTKF(self, eqconstr=rescale)
@@ -297,6 +299,7 @@ class ProblemParser:
                 alpha, beta, stats = \
                     optkalman.SQP_kalman(alpha0, beta0, formulation, opts=opts, verbose=verbose, rescale=rescale)
         elif algorithm == "IPOPT":
+            clean_opts_for_ipopt(opts)
             from .kalmanIPOPT import nlp_kalman_solve
             if verbose:
                 alpha, beta, stats = nlp_kalman_solve(self, alpha0, beta0, formulation, opts=opts, rescale=rescale)
@@ -355,3 +358,19 @@ class ProblemParser:
         db_fns = [
             ca.Function("dbfn{}".format(k), [alpha], [db]) for k, db in enumerate(db_syms)]
         return A_fns, b_fns, C, dA_fns, db_fns
+
+def clean_opts_for_ipopt(opts):
+    keys = [
+        "maxiter",
+        "pen_step",
+        "tol.kkt",
+        "tol.direction",
+        "rtol.cost_decrease",
+        "globalization.maxiter",
+        "globalization.beta",
+        "globalization.gamma",
+        "einsum"
+    ]
+    for key in keys:
+        if key in opts.keys():
+            del opts[key]

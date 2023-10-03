@@ -131,30 +131,28 @@ alpha0 = rng.random(model.nalpha)* alpha_max
 # ## Optimize over the Kalman filter 
 
 # %%
-formulation = "MLE" # can be "MLE", "PredErr"
+formulation = "PredErr" # can be "MLE", "PredErr"
 algorithm = "SQP" # can be "SQP" or "IPOPT"
 
 opts = {"pen_step":1e-4, "maxiter":20, "tol.direction":0., "tol.kkt":1e-8, "einsum":False} # parameters of the SQP method
 
 # %%
-rescale = (formulation == "PredErr")
-if algorithm == "IPOPT":
-    opts = {} # default options regarding IPOPT
-
-# %%
 t0 = time()
 
 alpha_found, beta_found, stats = problemTrain.solve(alpha0, beta0,
-                                                    formulation, algorithm, opts=opts, verbose=False, rescale=rescale)
+                                                    formulation, algorithm, opts=opts, verbose=False)
 rtime = time() - t0
 print("running time : {:.2e}  status : {}".format(rtime, stats["return_status"]))
 
 # %%
-print( alpha_true, alpha_found)
-print(beta_true, beta_found)
+#print( alpha_true, alpha_found)
+#print(beta_true, beta_found)
+e_alpha = np.linalg.norm(alpha_true-alpha_found)
+e_beta = np.linalg.norm(beta_true-beta_found)
+print(f"error on alpha : {e_alpha:.2e}   ,  error on beta : {e_beta:.2e}")
 
 # %%
-stats["rtimes"]
+if "rtimes" in stats.keys(): print(stats["rtimes"])
 
 # %% [markdown]
 # ### Validation on out-of-sample data 
@@ -167,3 +165,5 @@ t_pred, y_pred =  model.predictions(us_test, xs_est, alpha_found, npred)
 
 # %%
 fig =plot_est(us_test, ys_test, ys_est, pred=(t_pred, y_pred))
+
+# %%
