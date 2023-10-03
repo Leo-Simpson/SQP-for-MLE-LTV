@@ -123,238 +123,134 @@ class OPTKF:
         dR = symmetrize(dR)
         self.rtimes["get_dQR"] += time() - t0
         return dQ, dR
-   
-    def kalman_simulate_matrices_MLE(self, alpha, beta):
+
+    def kalman_simulate_matrices(self, alpha, beta):
         t0 = time()
         # symbol = type(alpha) is ca.SX
-        S = np.empty( (self.N+1, self.model.ny, self.model.ny) )
+        K = np.empty( (self.N+1, self.model.nx, self.model.ny) )
         M = np.empty( (self.N+1, self.model.ny, self.model.ny) )
+        S = np.empty( (self.N+1, self.model.ny, self.model.ny) )
         P = np.empty( (self.N+1, self.model.nx, self.model.nx) )
-        L = np.empty( (self.N+1, self.model.nx, self.model.ny) )
         logdetS = np.empty( (self.N+1) )
         P[0] = self.problem.P0
         As, bs = self.get_AbC(alpha)
         Q, R = self.model.get_QR(beta)
         for k in range(self.N+1):
-            P[k] = symmetrize(P[k])
             PC = P[k] @ self.C.T
             S[k] = self.C @ PC + R
             M[k], logdetS[k] = psd_inverse(S[k], self.inds_tri_M)
-            if k == self.N:
-                break
-            L[k] = As[k] @ PC
-            P[k+1] = As[k] @ P[k] @ As[k].T - L[k] @ M[k] @ L[k].T + Q
-                
-        matrices = {
-               "S": S, "M": M, "L":L,
-               "P":P, "logdetS": logdetS,
-               "A" : As, "b": bs
-        }
-        self.rtimes["kalman_simulate_matrices"] += time() - t0
-        return matrices
-   
-    def kalman_simulate_matrices_PredErr(self, alpha, beta):
-        t0 = time()
-        # symbol = type(alpha) is ca.SX
-        K = np.empty( (self.N+1, self.model.nx, self.model.ny) )
-        M = np.empty( (self.N+1, self.model.ny, self.model.ny) )
-        P = np.empty( (self.N+1, self.model.nx, self.model.nx) )
-        Pest = np.empty( (self.N, self.model.nx, self.model.nx) )
-        P[0] = self.problem.P0
-        As, bs = self.get_AbC(alpha)
-        Q, R = self.model.get_QR(beta)
-        for k in range(self.N+1):
-            P[k] = symmetrize(P[k])
-            PC = P[k] @ self.C.T
-            S= self.C @ PC + R
-            M[k] = psd_inverse(S, self.inds_tri_M, det=False)
             K[k] = PC @ M[k]
             if k == self.N:
                 break
-            Pest[k] = P[k] - K[k] @ PC.T
-            P[k+1] = As[k] @ Pest[k] @ As[k].T + Q
+            Pest = P[k] - K[k] @ PC.T
+            P[k+1] = symmetrize( As[k] @ Pest @ As[k].T + Q )
                 
         matrices = {
-               "P":P, "Pest":Pest, "K":K, "M":M,
+               "P":P, "K":K, "M":M, "S":S, "logdetS":logdetS,
                "A" : As, "b": bs
         }
         self.rtimes["kalman_simulate_matrices"] += time() - t0
         return matrices
 
-    def kalman_simulate_states_MLE(self, matrices):
-        t0 = time()
-        # symbol = type(alpha) is ca.SX
-        z = np.empty( (self.N+1, self.model.ny) )
-        x = np.empty( (self.N+1, self.model.nx) )
-        x[0] = self.problem.x0
-        for k in range(self.N+1):
-            z[k] = matrices["M"][k] @ (self.C @ x[k] - self.problem.ys[k] )
-            if k == self.N:
-                break
-            x[k+1] = matrices["A"][k] @ x[k] - matrices["L"][k] @ z[k] + matrices["b"][k]
-        states = {"z" : z, "x":x}
-        self.rtimes["kalman_simulate_states"] += time() - t0
-        return states
-
-    def kalman_simulate_states_PredErr(self, matrices):
+    def kalman_simulate_states(self, matrices):
         t0 = time()
         # symbol = type(alpha) is ca.SX
         e = np.empty( (self.N+1, self.model.ny) )
         x = np.empty( (self.N+1, self.model.nx) )
-        xest = np.empty( (self.N, self.model.nx) )
         x[0] = self.problem.x0
         for k in range(self.N+1):
-            e[k] = self.C @ x[k] - self.problem.ys[k]
+            e[k] = self.problem.ys[k] - self.C @ x[k]
             if k == self.N:
                 break
-            xest[k] = x[k] - matrices["K"][k] @ e[k]
-            x[k+1] = matrices["A"][k] @ xest[k] + matrices["b"][k]
-        states = {"e" : e, "x":x, "xest":xest}
+            x[k+1] = matrices["A"][k] @ (x[k] + matrices["K"][k] @ e[k]) + matrices["b"][k]
+        states = {"e" : e, "x":x}
         self.rtimes["kalman_simulate_states"] += time() - t0
         return states
 
-    def kalman_simulate(self, alpha, beta, formulation):
-        if formulation=="MLE":
-            matrices = self.kalman_simulate_matrices_MLE(alpha, beta)
-            states = self.kalman_simulate_states_MLE(matrices)
-        elif formulation=="PredErr":
-            matrices = self.kalman_simulate_matrices_PredErr(alpha, beta)
-            states = self.kalman_simulate_states_PredErr(matrices)
+    def kalman_simulate(self, alpha, beta):
+        matrices = self.kalman_simulate_matrices(alpha, beta)
+        states = self.kalman_simulate_states(matrices)
         return states, matrices
   
-    def cost_derivatives_MLE(self,  states, matrices, alpha, beta, neglect_logdet_hessian=True):
-        gradient, hessian = 0., 0.
-
-        dx_dalpha, dP_dalpha = np.zeros((self.model.nx, self.model.nalpha)), np.zeros((self.model.nx, self.model.nx, self.model.nalpha))
-        dx_dbeta, dP_dbeta = np.zeros((self.model.nx, self.model.nbeta)), np.zeros((self.model.nx, self.model.nx, self.model.nbeta))
-        dAs, dbs = self.get_dAb(alpha)
-        dQ, dR = self.get_dQR(beta)
-        for k in range(self.N+1):
-            xk, zk, Mk, C = states["x"][k], states["z"][k], matrices["M"][k], self.C
-
-            dS_dalpha = np.tensordot(C, C @ dP_dalpha, axes=(1,0))
-            dS_dbeta = np.tensordot(C, C @ dP_dbeta, axes=(1,0)) + dR
-            dM_dalpha_k = -np.tensordot(Mk, Mk @ dS_dalpha, axes=(1, 0))
-            dM_dbeta_k = -np.tensordot(Mk, Mk @ dS_dbeta, axes=(1, 0))
-            dz_dalpha_k = np.swapaxes(dM_dalpha_k, 1, 2) @ (C @ xk - self.problem.ys[k]) + Mk @ (C @ dx_dalpha)
-            dz_dbeta_k = np.swapaxes(dM_dbeta_k, 1, 2) @ (C @ xk - self.problem.ys[k]) + Mk @ (C @ dx_dbeta)
-
-            dM_dalpha_k = symmetrize(dM_dalpha_k)
-            dM_dbeta_k = symmetrize(dM_dbeta_k)
-            if k == self.N:
-                break
-            Pk, Lk, A = matrices["P"][k], matrices["L"][k], matrices["A"][k]
-
-
-            dL_dalpha = C @ (Pk.T @ dAs[k] + np.tensordot(A, dP_dalpha, axes=(1, 0)))
-            dL_dbeta = C @ np.tensordot(A, dP_dbeta, axes=(1, 0))
-            dx_dalpha = A @ dx_dalpha - Lk @ dz_dalpha_k + dbs[k] \
-                + np.swapaxes(dAs[k], 1, 2) @ xk - np.swapaxes(dL_dalpha, 1, 2) @ zk
-            dx_dbeta = A @ dx_dbeta - Lk @ dz_dbeta_k \
-                - np.swapaxes(dL_dbeta, 1, 2) @ zk
-            dP_dalpha = np.tensordot(A, A @ dP_dalpha, axes=(1, 0)) \
-                + 2 * np.tensordot(Pk @ A.T, dAs[k], axes=(0, 1)) \
-                - 2 * np.tensordot(Mk @ Lk.T, dL_dalpha, axes=(0, 1)) \
-                - np.tensordot(Lk, Lk @ dM_dalpha_k, axes=(1, 0))
-            dP_dbeta = np.tensordot(A, A @ dP_dbeta, axes=(1, 0)) \
-                - 2 * np.tensordot(Mk @ Lk.T, dL_dbeta, axes=(0, 1)) \
-                - np.tensordot(Lk, Lk @ dM_dbeta_k, axes=(1, 0)) \
-                + dQ
-            dP_dalpha = symmetrize(dP_dalpha)
-            dP_dbeta = symmetrize(dP_dbeta)
-
-            dz_dab_k = np.concatenate([dz_dalpha_k, dz_dbeta_k], axis=-1)
-            dM_dab_k = np.concatenate([dM_dalpha_k, dM_dbeta_k], axis=-1)
-            
-            e_k =  matrices["S"][k] @ zk
-            dMe_k = (e_k[np.newaxis, :] @ dM_dab_k)[:, 0, :]
-            trSdM_k = np.sum( dM_dab_k * matrices["S"][k][...,np.newaxis] , axis=(0,1) )
-            gradient_k = (2*dz_dab_k - dMe_k).T @ e_k - trSdM_k
-            hessian_k = np.linalg.multi_dot([ dz_dab_k.T, matrices["S"][k], dz_dab_k  ])
-            # if not neglect_logdet_hessian:
-            #     SdM_k = np.einsum("yw,wzp->yzp", matrices["S"][k], dM_dab_k, optimize=False)
-            #     hessian_k = hessian_k + np.einsum("yzp,yzq->pq", SdM_k, SdM_k, optimize=False)
-            gradient = gradient + gradient_k
-            hessian = hessian + hessian_k
-        
-        self.delete_unecessary(states, matrices, "MLE")
-        return gradient, hessian
-
-    def cost_derivatives_PredErr(self, states, matrices, alpha, beta):
+    def cost_derivatives(self, states, matrices, alpha, beta, formulation):
+        t0 = time()
         gradient, hessian = 0., 0.
         dx_dalpha, dP_dalpha = np.zeros((self.model.nx, self.model.nalpha)), np.zeros((self.model.nx, self.model.nx, self.model.nalpha))
         dx_dbeta, dP_dbeta = np.zeros((self.model.nx, self.model.nbeta)), np.zeros((self.model.nx, self.model.nx, self.model.nbeta))
         dAs, dbs = self.get_dAb(alpha)
         dQ, dR = self.get_dQR(beta)
         for k in range(self.N+1):
-            ek, Mk, C  = states["e"][k], matrices["M"][k], self.C
+            ek, Mk, Sk, C  = states["e"][k], matrices["M"][k], matrices["S"][k], self.C
             dS_dalpha = np.tensordot(C, C @ dP_dalpha, axes=(1,0))
             dS_dbeta = np.tensordot(C, C @ dP_dbeta, axes=(1,0)) + dR
-            dM_dalpha =-np.tensordot(Mk, Mk @ dS_dalpha, axes=(1, 0))
+            dM_dalpha = -np.tensordot(Mk, Mk @ dS_dalpha, axes=(1, 0))
             dM_dbeta = -np.tensordot(Mk, Mk @ dS_dbeta, axes=(1, 0))
             dM_dalpha = symmetrize(dM_dalpha)
-            dM_dalpha = symmetrize(dM_dbeta)
-            de_dalpha_k = C @ dx_dalpha
-            de_dbeta_k = C @ dx_dbeta
+            dM_dbeta = symmetrize(dM_dbeta)
+            de_dalpha_k = - C @ dx_dalpha
+            de_dbeta_k = - C @ dx_dbeta
             if k == self.N:
                 break
-            xestk, Kk, Pk, Pestk, A = states["xest"][k], matrices["K"][k], matrices["P"][k], matrices["Pest"][k], matrices["A"][k]
+            xk, Kk, Pk, A = states["x"][k], matrices["K"][k], matrices["P"][k], matrices["A"][k]
+            
             PC = Pk @ C.T
+            KC = Kk @ C
+
+            xestk = xk + Kk @ ek
+            Pestk = Pk - Kk @ PC.T
 
             dK_dalpha = np.tensordot(PC, dM_dalpha, axes=(1,0)) + (Mk @ C) @ dP_dalpha
             dK_dbeta = np.tensordot(PC, dM_dbeta, axes=(1,0)) + (Mk @ C) @ dP_dbeta
-            dxest_dalpha = dx_dalpha - Kk @ de_dalpha_k - np.swapaxes(dK_dalpha, 1, 2) @ ek
-            dxest_dbeta = dx_dbeta - Kk @ de_dbeta_k -  np.swapaxes(dK_dbeta, 1, 2) @ ek
-            dx_dalpha = A @ dxest_dalpha + dbs[k] + np.swapaxes(dAs[k], 1, 2) @ xestk
-            dPest_dalpha = dP_dalpha - np.tensordot( Kk @ C, dP_dalpha, axes=(1,0)) -  PC @ dK_dalpha
-            dPest_dbeta = dP_dbeta - np.tensordot( Kk @ C, dP_dbeta, axes=(1,0)) -  PC @ dK_dbeta
+            
+            dPest_dalpha = dP_dalpha - np.tensordot( KC, dP_dalpha, axes=(1,0)) -  PC @ dK_dalpha
+            dPest_dbeta = dP_dbeta - np.tensordot( KC, dP_dbeta, axes=(1,0)) -  PC @ dK_dbeta
             dP_dalpha = np.tensordot(A, A @ dPest_dalpha, axes=(1, 0)) \
                 + 2 * np.tensordot(Pestk @ A.T, dAs[k], axes=(0, 1))
             dP_dbeta = np.tensordot(A, A @ dPest_dbeta, axes=(1, 0)) + dQ
+            
+            dxest_dalpha = dx_dalpha + Kk @ de_dalpha_k + np.swapaxes(dK_dalpha, 1, 2) @ ek
+            dxest_dbeta = dx_dbeta + Kk @ de_dbeta_k +  np.swapaxes(dK_dbeta, 1, 2) @ ek
+            dx_dalpha = A @ dxest_dalpha + dbs[k] + np.swapaxes(dAs[k], 1, 2) @ xestk
             dx_dbeta = A @ dxest_dbeta
 
             dP_dalpha = symmetrize(dP_dalpha)
             dP_dbeta = symmetrize(dP_dbeta)
 
             de_dab_k = np.concatenate([de_dalpha_k, de_dbeta_k], axis=-1)
-            gradient_k = 2*de_dab_k.T @ ek
-            hessian_k = 2* de_dab_k.T @ de_dab_k
+            dM_dab_k = np.concatenate([dM_dalpha, dM_dbeta], axis=-1)
+            if formulation == "PredErr":
+                gradient_k = 2 * de_dab_k.T @ ek
+                hessian_k = 2 * de_dab_k.T @ de_dab_k
+            else:
+                trSdM_k = np.sum( dM_dab_k * Sk[...,np.newaxis] , axis=(0,1) )
+                dMe = (ek[np.newaxis, :] @ dM_dab_k)[:, 0, :]
+                Mde = Mk @ de_dab_k
+                gradient_k = (dMe + 2 * Mde).T @ ek - trSdM_k
+                hessian_k = 2 * np.linalg.multi_dot([ (dMe+Mde).T, Sk, dMe+Mde  ])
             gradient = gradient + gradient_k
             hessian = hessian + hessian_k
-        self.delete_unecessary(states, matrices, "PredErr")
+        self.delete_unecessary(states, matrices)
+        self.rtimes["cost_derivatives"] += time() - t0
         return gradient, hessian
             
-    def delete_unecessary(self, states, matrices, formulation):
+    def delete_unecessary(self, states, matrices):
         del states["x"]
-        del matrices["M"]
+        del matrices["S"]
         del matrices["P"]
         del matrices["A"]
         del matrices["b"]
-        if formulation=="MLE":
-            del matrices["L"]
-        elif formulation=="PredErr":
-            del matrices["Pest"]
-            del matrices["K"]
+        del matrices["K"]
 
     def cost_eval(self, states, matrices, alpha, beta, formulation):
         t0 = time()
         if formulation=="MLE":
-            value1 = np.sum(states["z"][:, np.newaxis] @ matrices["S"] @ states["z"][..., np.newaxis])
+            value1 = np.sum(states["e"][:, np.newaxis] @ matrices["M"] @ states["e"][..., np.newaxis])
             value = value1 + np.sum( matrices["logdetS"] )
         elif formulation=="PredErr":
             value = np.sum( states["e"]**2 )
         value = value + self.problem.L2pen * (np.sum( alpha**2 ) + np.sum(beta**2 ))
         self.rtimes["cost_eval"] += time() - t0
         return value
-
-    def cost_derivatives(self, states, matrices, alpha, beta, formulation, neglect_logdet_hessian=True):
-        t0 = time()
-        if formulation=="MLE":
-            gradient, hessian = self.cost_derivatives_MLE(states, matrices, alpha, beta, neglect_logdet_hessian=neglect_logdet_hessian)
-        elif formulation=="PredErr":
-            gradient, hessian = self.cost_derivatives_PredErr(states, matrices, alpha, beta)
-        self.rtimes["cost_derivatives"] += time() - t0
-        return gradient, hessian
 
     def eval_kkt_error(self, ab, gradient, multiplier):
         kkt_error =  gradient + self.derineqconstraints(ab, 0).full().T @ multiplier
@@ -389,7 +285,7 @@ class OPTKF:
         nalpha = self.model.nalpha
         alphaj = alpha0.copy()
         betaj = beta0.copy()
-        states, matrices = self.kalman_simulate(alphaj, betaj, formulation)
+        states, matrices = self.kalman_simulate(alphaj, betaj)
         cost = self.cost_eval(states, matrices, alphaj, betaj, formulation)
         objective_scale = 1.
         tol_direction = objective_scale * options["tol.direction"]
@@ -400,7 +296,7 @@ class OPTKF:
                 alphas.append(alphaj)
                 betas.append(betaj)
             if rescale:
-                betaj = betaj * self.scale(alphaj, betaj, formulation, states_and_matrices=(states, matrices))
+                betaj = betaj * self.scale(alphaj, betaj, states_and_matrices=(states, matrices))
             gradient, hessian = self.cost_derivatives(states, matrices, alphaj, betaj, formulation)
             ab = np.concatenate([alphaj, betaj])
             hessian_ = hessian + 2*options["pen_step"]* np.eye(len(ab))
@@ -456,7 +352,7 @@ class OPTKF:
             return alphas, betas
 
         if rescale:
-            betaj = betaj *self.scale(alphaj, betaj, formulation)
+            betaj = betaj *self.scale(alphaj, betaj)
         self.rtimes["total"] += time() - t0
         stats =  {"termination":termination, "niter":niter, "rtimes":self.rtimes}
         stats["return_status"] = stats["termination"]
@@ -467,7 +363,7 @@ class OPTKF:
         for i_glob in range(maxiter):
             alpha_middle = (1 - tau) * alpha0 + tau * alpha1
             beta_middle = (1 - tau) * beta0 + tau * beta1
-            states, matrices = self.kalman_simulate(alpha_middle, beta_middle, formulation)
+            states, matrices = self.kalman_simulate(alpha_middle, beta_middle)
             cost_middle = self.cost_eval(states, matrices, alpha_middle, beta_middle, formulation)
             condition = (cost - cost_middle) / tau > gamma * der and np.all(beta_middle >= 0.)
             if condition:
@@ -476,14 +372,11 @@ class OPTKF:
         if verbose: print("Globalization did not finish with tau = {}".format(tau))
         return tau, cost, None, None  
 
-    def scale(self, alpha, beta, formulation, states_and_matrices=None):
+    def scale(self, alpha, beta, states_and_matrices=None):
         if states_and_matrices is None:
-            states, matrices = self.kalman_simulate(alpha, beta, formulation)
+            states, matrices = self.kalman_simulate(alpha, beta)
         else:
             states, matrices = states_and_matrices
         dimension = (self.N+1) * self.model.ny
-        if formulation=="MLE":
-            lamb = np.sum(states["z"][:, np.newaxis] @ matrices["S"] @ states["z"][..., np.newaxis]) / dimension
-        elif formulation=="PredErr":
-            lamb = np.sum(states["e"][:, np.newaxis] @ matrices["M"] @ states["e"][..., np.newaxis]) / dimension
+        lamb = np.sum(states["e"][:, np.newaxis] @ matrices["M"] @ states["e"][..., np.newaxis]) / dimension
         return lamb
