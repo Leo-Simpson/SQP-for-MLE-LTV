@@ -4,14 +4,14 @@ from time import time
 from .misc import symmetrize, symmetrize, psd_inverse
 
 default_opts = {"maxiter":50,
-          "pen_step":0.,
-          "tol.kkt":0.1,
-          "tol.direction":1e-3,
+          "pen_step":1e-4,
+          "tol.kkt":1e-6,
+          "tol.direction":1e-6,
           "rtol.cost_decrease":1e-6,
           "globalization.maxiter":20,
           "globalization.beta":0.8,
           "globalization.gamma":0.1,
-          "einsum": True,
+          "einsum": False,
           }
 
 class OPTKF:
