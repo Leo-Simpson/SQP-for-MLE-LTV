@@ -451,7 +451,7 @@ class OPTKF:
             if path:
                 alphas.append(alphaj)
                 betas.append(betaj)
-            if (formulation=="MLE") and rescale:
+            if rescale:
                 betaj = betaj * self.scale(alphaj, betaj, formulation, states_and_matrices=(states, matrices))
             gradient, hessian = self.cost_derivatives(states, matrices, alphaj, betaj, formulation)
             ab = np.concatenate([alphaj, betaj])

@@ -131,7 +131,7 @@ alpha0 = rng.random(model.nalpha)* alpha_max
 # ## Optimize over the Kalman filter 
 
 # %%
-formulation = "PredErr" # can be "MLE", "PredErr"
+formulation = "MLE" # can be "MLE", "PredErr"
 algorithm = "SQP" # can be "SQP" or "IPOPT"
 
 opts = {"pen_step":1e-4, "maxiter":20, "tol.direction":0., "tol.kkt":1e-8, "einsum":False} # parameters of the SQP method
