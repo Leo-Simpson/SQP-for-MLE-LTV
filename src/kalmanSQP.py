@@ -231,10 +231,7 @@ class OPTKF:
         return states, matrices
   
     def cost_derivatives_MLE(self,  states, matrices, alpha, beta, neglect_logdet_hessian=True):
-        dz_dalpha = np.empty((self.N+1, self.model.ny, self.model.nalpha))
-        dz_dbeta = np.empty((self.N+1, self.model.ny, self.model.nbeta))
-        dM_dalpha = np.empty((self.N+1, self.model.ny, self.model.ny, self.model.nalpha))
-        dM_dbeta = np.empty((self.N+1, self.model.ny, self.model.ny, self.model.nbeta))
+        gradient, hessian = 0., 0.
 
         dx_dalpha, dP_dalpha = np.zeros((self.model.nx, self.model.nalpha)), np.zeros((self.model.nx, self.model.nx, self.model.nalpha))
         dx_dbeta, dP_dbeta = np.zeros((self.model.nx, self.model.nbeta)), np.zeros((self.model.nx, self.model.nx, self.model.nbeta))
@@ -244,20 +241,20 @@ class OPTKF:
             xk, zk, Mk, C = states["x"][k], states["z"][k], matrices["M"][k], self.C
             if self.einsum:
                 dS_dbeta = np.einsum("xwb,yx,zw->yzb", dP_dbeta, C, C, optimize=False) + dR
-                dM_dalpha[k] = -np.einsum("xwa,yx,zw,yv,uz->vua", dP_dalpha, C, C, Mk, Mk, optimize=False)
-                dM_dbeta[k] = -np.einsum("yzb,yv,uz->vub", dS_dbeta, Mk, Mk, optimize=False)
-                dz_dalpha[k] = np.einsum("wya,y->wa", dM_dalpha[k], C @xk - self.problem.ys[k], optimize=False) + Mk @ (C @ dx_dalpha)
-                dz_dbeta[k] = np.einsum("wya,y->wa", dM_dbeta[k], C @xk - self.problem.ys[k], optimize=False) + Mk @ (C @ dx_dbeta)
+                dM_dalpha_k = -np.einsum("xwa,yx,zw,yv,uz->vua", dP_dalpha, C, C, Mk, Mk, optimize=False)
+                dM_dbeta_k = -np.einsum("yzb,yv,uz->vub", dS_dbeta, Mk, Mk, optimize=False)
+                dz_dalpha_k = np.einsum("wya,y->wa", dM_dalpha_k, C @xk - self.problem.ys[k], optimize=False) + Mk @ (C @ dx_dalpha)
+                dz_dbeta_k = np.einsum("wya,y->wa", dM_dbeta_k, C @xk - self.problem.ys[k], optimize=False) + Mk @ (C @ dx_dbeta)
             else:
                 dS_dalpha = np.tensordot(C, C @ dP_dalpha, axes=(1,0))
                 dS_dbeta = np.tensordot(C, C @ dP_dbeta, axes=(1,0)) + dR
-                dM_dalpha[k] = -np.tensordot(Mk, Mk @ dS_dalpha, axes=(1, 0))
-                dM_dbeta[k] = -np.tensordot(Mk, Mk @ dS_dbeta, axes=(1, 0))
-                dz_dalpha[k] = np.swapaxes(dM_dalpha[k], 1, 2) @ (C @ xk - self.problem.ys[k]) + Mk @ (C @ dx_dalpha)
-                dz_dbeta[k] = np.swapaxes(dM_dbeta[k], 1, 2) @ (C @ xk - self.problem.ys[k]) + Mk @ (C @ dx_dbeta)
+                dM_dalpha_k = -np.tensordot(Mk, Mk @ dS_dalpha, axes=(1, 0))
+                dM_dbeta_k = -np.tensordot(Mk, Mk @ dS_dbeta, axes=(1, 0))
+                dz_dalpha_k = np.swapaxes(dM_dalpha_k, 1, 2) @ (C @ xk - self.problem.ys[k]) + Mk @ (C @ dx_dalpha)
+                dz_dbeta_k = np.swapaxes(dM_dbeta_k, 1, 2) @ (C @ xk - self.problem.ys[k]) + Mk @ (C @ dx_dbeta)
 
-            dM_dalpha[k] = symmetrize(dM_dalpha[k])
-            dM_dbeta[k] = symmetrize(dM_dbeta[k])
+            dM_dalpha_k = symmetrize(dM_dalpha_k)
+            dM_dbeta_k = symmetrize(dM_dbeta_k)
             if k == self.N:
                 break
             Pk, Lk, A = matrices["P"][k], matrices["L"][k], matrices["A"][k]
@@ -266,61 +263,55 @@ class OPTKF:
                 dL_dalpha = np.einsum("xwa,wv,yv->xya", dAs[k], Pk, C, optimize=False) \
                     + np.einsum("xw,wva,yv->xya", A, dP_dalpha, C, optimize=False)  
                 dL_dbeta = np.einsum("xw,wvb,yv->xyb", A, dP_dbeta, C, optimize=False)
-                dx_dalpha = A @ dx_dalpha - Lk @ dz_dalpha[k] + dbs[k] \
+                dx_dalpha = A @ dx_dalpha - Lk @ dz_dalpha_k + dbs[k] \
                      + np.einsum("xwa,w->xa", dAs[k], xk, optimize=False) - np.einsum("xwa,w->xa", dL_dalpha, zk, optimize=False)
-                dx_dbeta = A @ dx_dbeta - Lk @ dz_dbeta[k] \
+                dx_dbeta = A @ dx_dbeta - Lk @ dz_dbeta_k \
                     - np.einsum("xwa,w->xa", dL_dbeta, zk, optimize=False)
                 dP_dalpha = 2 * np.einsum("xwa,wv,uv->xua", dAs[k], Pk, A, optimize=False) \
                     + np.einsum("xw,wva,uv->xua", A, dP_dalpha, A, optimize=False) \
                     - 2 * np.einsum("xwa,wv,uv->xua", dL_dalpha, Mk, Lk, optimize=False) \
-                    - np.einsum("xw,wva,uv->xua", Lk, dM_dalpha[k], Lk, optimize=False)
+                    - np.einsum("xw,wva,uv->xua", Lk, dM_dalpha_k, Lk, optimize=False)
                 dP_dbeta = np.einsum("xw,wvb,uv->xub", A, dP_dbeta, A, optimize=False) \
                     - 2 * np.einsum("xwb,wv,uv->xub", dL_dbeta, Mk, Lk, optimize=False) \
-                    - np.einsum("xw,wvb,uv->xub", Lk, dM_dbeta[k], Lk, optimize=False) \
+                    - np.einsum("xw,wvb,uv->xub", Lk, dM_dbeta_k, Lk, optimize=False) \
                     + dQ
             else:
                 dL_dalpha = C @ (Pk.T @ dAs[k] + np.tensordot(A, dP_dalpha, axes=(1, 0)))
                 dL_dbeta = C @ np.tensordot(A, dP_dbeta, axes=(1, 0))
-                dx_dalpha = A @ dx_dalpha - Lk @ dz_dalpha[k] + dbs[k] \
+                dx_dalpha = A @ dx_dalpha - Lk @ dz_dalpha_k + dbs[k] \
                     + np.swapaxes(dAs[k], 1, 2) @ xk - np.swapaxes(dL_dalpha, 1, 2) @ zk
-                dx_dbeta = A @ dx_dbeta - Lk @ dz_dbeta[k] \
+                dx_dbeta = A @ dx_dbeta - Lk @ dz_dbeta_k \
                     - np.swapaxes(dL_dbeta, 1, 2) @ zk
                 dP_dalpha = np.tensordot(A, A @ dP_dalpha, axes=(1, 0)) \
                     + 2 * np.tensordot(Pk @ A.T, dAs[k], axes=(0, 1)) \
                     - 2 * np.tensordot(Mk @ Lk.T, dL_dalpha, axes=(0, 1)) \
-                    - np.tensordot(Lk, Lk @ dM_dalpha[k], axes=(1, 0))
+                    - np.tensordot(Lk, Lk @ dM_dalpha_k, axes=(1, 0))
                 dP_dbeta = np.tensordot(A, A @ dP_dbeta, axes=(1, 0)) \
                     - 2 * np.tensordot(Mk @ Lk.T, dL_dbeta, axes=(0, 1)) \
-                    - np.tensordot(Lk, Lk @ dM_dbeta[k], axes=(1, 0)) \
+                    - np.tensordot(Lk, Lk @ dM_dbeta_k, axes=(1, 0)) \
                     + dQ
             dP_dalpha = symmetrize(dP_dalpha)
             dP_dbeta = symmetrize(dP_dbeta)
 
-        dz_dab = np.concatenate([dz_dalpha, dz_dbeta], axis=-1)
-        dM_dab = np.concatenate([dM_dalpha, dM_dbeta], axis=-1)
+            dz_dab_k = np.concatenate([dz_dalpha_k, dz_dbeta_k], axis=-1)
+            dM_dab_k = np.concatenate([dM_dalpha_k, dM_dbeta_k], axis=-1)
+            
+            e_k =  matrices["S"][k] @ zk
+            dMe_k = (e_k[np.newaxis, :] @ dM_dab_k)[:, 0, :]
+            trSdM_k = np.sum( dM_dab_k * matrices["S"][k][...,np.newaxis] , axis=(0,1) )
+            gradient_k = (2*dz_dab_k - dMe_k).T @ e_k - trSdM_k
+            hessian_k = np.linalg.multi_dot([ dz_dab_k.T, matrices["S"][k], dz_dab_k  ])
+            if not neglect_logdet_hessian:
+                SdM_k = np.einsum("yw,wzp->yzp", matrices["S"][k], dM_dab_k, optimize=False)
+                hessian_k = hessian_k + np.einsum("yzp,yzq->pq", SdM_k, SdM_k, optimize=False)
+            gradient = gradient + gradient_k
+            hessian = hessian + hessian_k
+        
         self.delete_unecessary(states, matrices, "MLE")
-        if self.einsum:
-            e =  np.einsum("kyz,kz->ky", matrices["S"], states["z"], optimize=False)
-            SdM = np.einsum("kyw,kwzp->kyzp", matrices["S"], dM_dab, optimize=False)
-            dMe = np.einsum("kywp,kw->kyp", dM_dab, e, optimize=False)
-            gradient = np.einsum("kzp,kz->p", 2*dz_dab - dMe, e, optimize=False) - np.trace(np.sum(SdM, axis=0))
-            hessian =  np.einsum( "kzp,kzy,kyq->pq", dz_dab, matrices["S"], dz_dab, optimize=False  )
-            if not neglect_logdet_hessian:
-                hessian = hessian + np.einsum("kyzp,kyzq->pq", SdM, SdM, optimize=False)
-        else:
-            e =  (matrices["S"] @ states["z"][..., np.newaxis])[..., 0]
-            SdM = np.transpose(matrices["S"][:, np.newaxis] @ np.transpose(dM_dab, (0, 3, 1, 2)), (0, 2, 3, 1))
-            dMe = (e[:, np.newaxis, np.newaxis] @ dM_dab)[:, :, 0]
-            gradient = np.sum((e[:, np.newaxis] @ (2*dz_dab - dMe))[:,0], axis=0) - np.trace(np.sum(SdM, axis=0))
-            hessian = np.sum(np.swapaxes(dz_dab, 1, 2) @ matrices["S"] @ dz_dab, axis=0)
-            if not neglect_logdet_hessian:
-                hessian = hessian + np.sum(np.swapaxes(SdM, -1, -2) @ SdM, axis=(0, 1))
         return gradient, hessian
 
     def cost_derivatives_PredErr(self, states, matrices, alpha, beta):
-        de_dalpha = np.empty((self.N+1, self.model.ny, self.model.nalpha))
-        de_dbeta = np.empty((self.N+1, self.model.ny, self.model.nbeta))
-
+        gradient, hessian = 0., 0.
         dx_dalpha, dP_dalpha = np.zeros((self.model.nx, self.model.nalpha)), np.zeros((self.model.nx, self.model.nx, self.model.nalpha))
         dx_dbeta, dP_dbeta = np.zeros((self.model.nx, self.model.nbeta)), np.zeros((self.model.nx, self.model.nx, self.model.nbeta))
         dAs, dbs = self.get_dAb(alpha)
@@ -338,8 +329,8 @@ class OPTKF:
                 dM_dbeta = -np.tensordot(Mk, Mk @ dS_dbeta, axes=(1, 0))
             dM_dalpha = symmetrize(dM_dalpha)
             dM_dalpha = symmetrize(dM_dbeta)
-            de_dalpha[k] = C @ dx_dalpha
-            de_dbeta[k] = C @ dx_dbeta
+            de_dalpha_k = C @ dx_dalpha
+            de_dbeta_k = C @ dx_dbeta
             if k == self.N:
                 break
             xestk, Kk, Pk, Pestk, A = states["xest"][k], matrices["K"][k], matrices["P"][k], matrices["Pest"][k], matrices["A"][k]
@@ -349,8 +340,8 @@ class OPTKF:
                     + np.einsum("xva,yv,yz->xza", dP_dalpha, C, Mk, optimize=False)
                 dK_dbeta = np.einsum("xv,yv,yzb->xzb", Pk, C, dM_dbeta, optimize=False) \
                     + np.einsum("xvb,yv,yz->xzb", dP_dbeta, C, Mk, optimize=False)
-                dxest_dalpha = dx_dalpha - Kk @ de_dalpha[k] - np.einsum("xwa,w->xa", dK_dalpha, ek, optimize=False)
-                dxest_dbeta = dx_dbeta - Kk @ de_dbeta[k] - np.einsum("xwb,w->xb", dK_dbeta, ek, optimize=False)
+                dxest_dalpha = dx_dalpha - Kk @ de_dalpha_k - np.einsum("xwa,w->xa", dK_dalpha, ek, optimize=False)
+                dxest_dbeta = dx_dbeta - Kk @ de_dbeta_k - np.einsum("xwb,w->xb", dK_dbeta, ek, optimize=False)
                 dx_dalpha = A @ dxest_dalpha + dbs[k] + np.einsum("xwa,w->xa", dAs[k], xestk, optimize=False)
                 dPest_dalpha = dP_dalpha - np.einsum("xy,yu,uva->xva", Kk, C, dP_dalpha) - np.einsum("xya,yu,uv->xva", dK_dalpha, C, Pk)
                 dPest_dbeta = dP_dbeta - np.einsum("xy,yu,uvb->xvb", Kk, C, dP_dbeta) - np.einsum("xyb,yu,uv->xvb", dK_dbeta, C, Pk)
@@ -360,8 +351,8 @@ class OPTKF:
             else:
                 dK_dalpha = np.tensordot(PC, dM_dalpha, axes=(1,0)) + (Mk @ C) @ dP_dalpha
                 dK_dbeta = np.tensordot(PC, dM_dbeta, axes=(1,0)) + (Mk @ C) @ dP_dbeta
-                dxest_dalpha = dx_dalpha - Kk @ de_dalpha[k] - np.swapaxes(dK_dalpha, 1, 2) @ ek
-                dxest_dbeta = dx_dbeta - Kk @ de_dbeta[k] -  np.swapaxes(dK_dbeta, 1, 2) @ ek
+                dxest_dalpha = dx_dalpha - Kk @ de_dalpha_k - np.swapaxes(dK_dalpha, 1, 2) @ ek
+                dxest_dbeta = dx_dbeta - Kk @ de_dbeta_k -  np.swapaxes(dK_dbeta, 1, 2) @ ek
                 dx_dalpha = A @ dxest_dalpha + dbs[k] + np.swapaxes(dAs[k], 1, 2) @ xestk
                 dPest_dalpha = dP_dalpha - np.tensordot( Kk @ C, dP_dalpha, axes=(1,0)) -  PC @ dK_dalpha
                 dPest_dbeta = dP_dbeta - np.tensordot( Kk @ C, dP_dbeta, axes=(1,0)) -  PC @ dK_dbeta
@@ -373,13 +364,11 @@ class OPTKF:
             dP_dalpha = symmetrize(dP_dalpha)
             dP_dbeta = symmetrize(dP_dbeta)
 
-        de_dab = np.concatenate([de_dalpha, de_dbeta], axis=-1)
-        if self.einsum:
-            gradient =  2*np.einsum("kzp,kz->p",de_dab, states["e"], optimize=False)
-            hessian = 2*np.einsum("kzp,kzq->pq", de_dab, de_dab, optimize=False)
-        else:
-            gradient =  2 * np.tensordot(de_dab, states["e"], axes=([0,1], [0,1])  )
-            hessian = 2 * np.tensordot(de_dab, de_dab, axes=([0,1], [0,1])  )
+            de_dab_k = np.concatenate([de_dalpha_k, de_dbeta_k], axis=-1)
+            gradient_k = 2*de_dab_k.T @ ek
+            hessian_k = 2* de_dab_k.T @ de_dab_k
+            gradient = gradient + gradient_k
+            hessian = hessian + hessian_k
         self.delete_unecessary(states, matrices, "PredErr")
         return gradient, hessian
             
