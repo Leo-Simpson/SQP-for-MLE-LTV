@@ -241,17 +241,16 @@ class OPTKF:
         del matrices["b"]
         del matrices["K"]
 
-    def cost_eval(self, states, matrices, alpha, beta, formulation):
+    def cost(self, alpha, beta, formulation, states_and_matrices=None):
         t0 = time()
-        if formulation=="MLE":
-            value1 = np.sum(states["e"][:, np.newaxis] @ matrices["M"] @ states["e"][..., np.newaxis])
-            value = value1 + np.sum( matrices["logdetS"] )
-        elif formulation=="PredErr":
-            value = np.sum( states["e"]**2 )
-        value = value + self.problem.L2pen * (np.sum( alpha**2 ) + np.sum(beta**2 ))
+        if states_and_matrices is None:
+            states, matrices = self.kalman_simulate(alpha, beta)
+        else:
+            states, matrices = states_and_matrices
+        value = cost_eval(states, matrices, alpha, beta, formulation, L2pen=self.problem.L2pen)
         self.rtimes["cost_eval"] += time() - t0
-        return value
-
+        return states, matrices, value
+    
     def eval_kkt_error(self, ab, gradient, multiplier):
         kkt_error =  gradient + self.derineqconstraints(ab, 0).full().T @ multiplier
         return np.sum( abs(kkt_error))
@@ -285,8 +284,7 @@ class OPTKF:
         nalpha = self.model.nalpha
         alphaj = alpha0.copy()
         betaj = beta0.copy()
-        states, matrices = self.kalman_simulate(alphaj, betaj)
-        cost = self.cost_eval(states, matrices, alphaj, betaj, formulation)
+        states, matrices, cost = self.cost(alphaj, betaj, formulation)
         objective_scale = 1.
         tol_direction = objective_scale * options["tol.direction"]
         if path:
@@ -363,8 +361,7 @@ class OPTKF:
         for i_glob in range(maxiter):
             alpha_middle = (1 - tau) * alpha0 + tau * alpha1
             beta_middle = (1 - tau) * beta0 + tau * beta1
-            states, matrices = self.kalman_simulate(alpha_middle, beta_middle)
-            cost_middle = self.cost_eval(states, matrices, alpha_middle, beta_middle, formulation)
+            states, matrices, cost_middle = self.cost(alpha_middle, beta_middle, formulation)
             condition = (cost - cost_middle) / tau > gamma * der and np.all(beta_middle >= 0.)
             if condition:
                     return tau, cost_middle, states, matrices
@@ -380,3 +377,18 @@ class OPTKF:
         dimension = (self.N+1) * self.model.ny
         lamb = np.sum(states["e"][:, np.newaxis] @ matrices["M"] @ states["e"][..., np.newaxis]) / dimension
         return lamb
+
+    def cost_derivatives_fd(self, states, matrices, alpha, beta, formulation):
+        der = 0.
+        return der
+
+
+# utils
+def cost_eval(states, matrices, alpha, beta, formulation, L2pen=0.):
+    if formulation=="MLE":
+        value1 = np.sum(states["e"][:, np.newaxis] @ matrices["M"] @ states["e"][..., np.newaxis])
+        value = value1 + np.sum( matrices["logdetS"] )
+    elif formulation=="PredErr":
+        value = np.sum( states["e"]**2 )
+    value = value + L2pen * (np.sum( alpha**2 ) + np.sum(beta**2 ))
+    return value
