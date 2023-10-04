@@ -26,25 +26,20 @@ class OPTKF:
         self.rinit()
 
     def rinit(self):
-        self.rtimes = {
-            "linearized_fn":0.,
-            "kalman_simulate_matrices":0.,
-            "kalman_simulate_states":0.,
-            "prepare":0.,
-            "cost_eval":0.,
-            "cost_derivatives":0.,
-            "QP":0.,
-            "get_AbC":0.,
-            "get_dAb":0.,
-            "get_dQR":0.,
-            "total":0.
-            }
+        fn_names = [
+            "linearized_fn","kalman_simulate_matrices","kalman_simulate_states",
+            "prepare","cost_eval","cost_derivatives","QP",
+            "get_AbC","get_dAb","get_dQR","total"
+            ]
+        self.rtimes = {key:0 for key in fn_names}
+        self.ncall = {key:0 for key in fn_names}
 
     def linearized_fn(self):
         t0 = time()
         self.A_fns, self.b_fns, self.C, self.dA_fns, self.db_fns = self.problem.gradient_dyna_fn()
         self.dQ_fn, self.dR_fn = self.model.gradient_covariances_fn()
         self.rtimes["linearized_fn"] += time() - t0
+        self.ncall["linearized_fn"] += 1
             
     def make_constr(self, eqconstr=True):
         alpha = ca.SX.sym("alpha_sym", self.model.nalpha)
@@ -79,6 +74,7 @@ class OPTKF:
         self.linearized_fn()
         self.inds_tri_M = np.tri(self.model.ny, k=-1, dtype=np.bool)
         self.rtimes["prepare"] += time() - t0
+        self.ncall["prepare"] += 1
 
     def complete_opts(self, opts):
         options = default_opts.copy()
@@ -97,6 +93,7 @@ class OPTKF:
         if len(bs) == 1:
             bs = bs * self.N
         self.rtimes["get_AbC"] += time() - t0
+        self.ncall["get_AbC"] += 1
         return As, bs
 
     def get_dAb(self, alpha):
@@ -113,6 +110,7 @@ class OPTKF:
         if len(dbs) == 1:
             dbs = dbs * self.N
         self.rtimes["get_dAb"] += time() - t0
+        self.ncall["get_dAb"] += 1
         return dAs, dbs
     
     def get_dQR(self, beta):
@@ -122,6 +120,7 @@ class OPTKF:
         dQ = symmetrize(dQ)
         dR = symmetrize(dR)
         self.rtimes["get_dQR"] += time() - t0
+        self.ncall["get_dQR"] += 1
         return dQ, dR
 
     def kalman_simulate_matrices(self, alpha, beta):
@@ -150,6 +149,7 @@ class OPTKF:
                "A" : As, "b": bs
         }
         self.rtimes["kalman_simulate_matrices"] += time() - t0
+        self.ncall["kalman_simulate_matrices"] += 1
         return matrices
 
     def kalman_simulate_states(self, matrices):
@@ -165,6 +165,7 @@ class OPTKF:
             x[k+1] = matrices["A"][k] @ (x[k] + matrices["K"][k] @ e[k]) + matrices["b"][k]
         states = {"e" : e, "x":x}
         self.rtimes["kalman_simulate_states"] += time() - t0
+        self.ncall["kalman_simulate_states"] += 1
         return states
 
     def kalman_simulate(self, alpha, beta):
@@ -231,6 +232,7 @@ class OPTKF:
             hessian = hessian + hessian_k
         self.delete_unecessary(states, matrices)
         self.rtimes["cost_derivatives"] += time() - t0
+        self.ncall["cost_derivatives"] += 1
         return gradient, hessian
             
     def delete_unecessary(self, states, matrices):
@@ -249,6 +251,7 @@ class OPTKF:
             states, matrices = states_and_matrices
         value = cost_eval(states, matrices, alpha, beta, formulation, L2pen=self.problem.L2pen)
         self.rtimes["cost_eval"] += time() - t0
+        self.ncall["cost_eval"] += 1
         return states, matrices, value
     
     def eval_kkt_error(self, ab, gradient, multiplier):
@@ -274,6 +277,7 @@ class OPTKF:
         lam = np.squeeze(np.array(sol["z"]))
         der = -(p + Q @ x_start) @ (x - x_start)
         self.rtimes["QP"] += time() - t0
+        self.ncall["QP"] += 1
         return x, lam, der
 
     def SQP_kalman(self, alpha0, beta0, formulation, opts={}, verbose=True, path=False, rescale=True):
@@ -352,7 +356,8 @@ class OPTKF:
         if rescale:
             betaj = betaj *self.scale(alphaj, betaj)
         self.rtimes["total"] += time() - t0
-        stats =  {"termination":termination, "niter":niter, "rtimes":self.rtimes}
+        self.ncall["total"] += 1
+        stats =  {"termination":termination, "niter":niter, "rtimes":self.rtimes, "ncall":self.ncall}
         stats["return_status"] = stats["termination"]
         return alphaj, betaj, stats
 
