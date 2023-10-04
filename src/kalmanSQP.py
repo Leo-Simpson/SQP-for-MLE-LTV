@@ -16,17 +16,17 @@ default_opts = {"maxiter":50,
 
 def myprod1(dA, B):
     # computes the derivative of A(t) B
-    return np.einsum("uvw,vx->uxw", dA, B)
-    # return B.T @ dA
+    # return np.einsum("uvw,vx->uxw", dA, B)
+    return B.T @ dA
 
 def myprodvec(dA, x):
-    return np.einsum("uvw,v->uw", dA, x)
-    # return np.swapaxes(dA, 1, 2) @ x
+    # return np.einsum("uvw,v->uw", dA, x)
+    return np.swapaxes(dA, 1, 2) @ x
 
 def myprod2(A, dB):
     # computes the derivative of A B(t)
-    return np.einsum("uv,vxw->uxw", A, dB)
-    # return np.tensordot(A, dB, axes=(1,0))
+    # return np.einsum("uv,vxw->uxw", A, dB)
+    return np.tensordot(A, dB, axes=(1,0))
 
 
 def myprod3(A, dB):
