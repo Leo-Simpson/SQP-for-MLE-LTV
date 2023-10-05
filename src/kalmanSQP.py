@@ -4,7 +4,6 @@ from time import time
 from .misc import symmetrize, symmetrize, psd_inverse
 
 default_opts = {"maxiter":50,
-          "pen_step":1e-4,
           "pen_step":1e-5,
           "tol.kkt":1e-5,
           "tol.direction":1e-5,
