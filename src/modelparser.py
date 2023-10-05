@@ -293,7 +293,8 @@ class ProblemParser:
             rescale = (formulation == "PredErr")
         if algorithm == "SQP":
                 from .kalmanSQP import OPTKF
-                optkalman = OPTKF(self, eqconstr=rescale)
+                eqconstr = rescale & (formulation == "PredErr")
+                optkalman = OPTKF(self, eqconstr=eqconstr)
                 optkalman.prepare()
                 optkalman.rinit()
                 alpha, beta, stats = \
