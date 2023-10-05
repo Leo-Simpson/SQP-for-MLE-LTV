@@ -28,7 +28,6 @@ def myprod2(A, dB):
     # return np.einsum("uv,vxw->uxw", A, dB)
     return np.tensordot(A, dB, axes=(1,0))
 
-
 def myprod3(A, dB):
     # computes the derivative of A B(t) A.T
     return np.einsum("uv,vxw,yx->uyw", A, dB, A)
@@ -36,15 +35,21 @@ def myprod3(A, dB):
 
 class OPTKF:
 
-    def __init__(self, problem, eqconstr=True):
+    def __init__(self, problem, formulation, eqconstr=True, verbose=True, rescale=True, opts={}):
         self.model = problem.model
         self.problem = problem
         self.N = problem.N
+        self.formulation = formulation
+        self.verbose = verbose
+        self.rescale = rescale
+        self.opts = self.complete_opts(opts)
         self.make_constr(eqconstr=eqconstr)
         self.nM = int(self.model.ny * (self.model.ny + 1) / 2)
         self.nP = int(self.model.nx * (self.model.nx + 1) / 2)
         self.nab = self.model.nalpha + self.model.nbeta
         self.rinit()
+        if formulation not in ["MLE", "PredErr"]:
+            raise ValueError("Formulation {} is unknown. Choose between 'MLE' or 'PredError'".format(formulation))
 
     def rinit(self):
         fn_names = [
@@ -166,16 +171,15 @@ class OPTKF:
                     self.inds_tri_M)
 
             logdetS = logdetS + logdetSk
-        auxvar = {
+        self.aux = {
                "P":Ps, "L":Ls, "M":Ms, "S":Ss, "logdetS":logdetS,
                "A" : As, "b": bs,
                "e" : es, "x":xs
         }
         self.rtimes["kalman_simulate"] += time() - t0
         self.ncall["kalman_simulate"] += 1
-        return auxvar
 
-    def cost_derivatives(self, aux, alpha, beta, formulation):
+    def cost_derivatives(self, alpha, beta):
         t0 = time()
         gradient, hessian = 0., 0.
         dx_dalpha, dP_dalpha = np.zeros((self.model.nx, self.model.nalpha)), np.zeros((self.model.nx, self.model.nx, self.model.nalpha))
@@ -183,19 +187,19 @@ class OPTKF:
         dAs, dbs = self.get_dAb(alpha)
         dQ, dR = self.get_dQR(beta)
         for k in range(self.N):
-            e, M, S  = aux["e"][k], aux["M"][k], aux["S"][k]
+            e, M, S  = self.aux["e"][k], self.aux["M"][k], self.aux["S"][k]
             dM_dalpha, de_dalpha, dP_dalpha, dx_dalpha = \
                 kalman_step_dalpha(dx_dalpha, dP_dalpha, dAs[k], dbs[k],
                                    e, M, S, self.C,
-                                   aux["x"][k], aux["L"][k], aux["P"][k], aux["A"][k])
+                                   self.aux["x"][k], self.aux["L"][k], self.aux["P"][k], self.aux["A"][k])
             dM_dbeta, de_dbeta, dP_dbeta, dx_dbeta = \
                 kalman_step_dbeta(dx_dbeta, dP_dbeta, dQ, dR, 
                                     e, M, S, self.C,
-                                    aux["x"][k], aux["L"][k], aux["P"][k], aux["A"][k])
+                                    self.aux["x"][k], self.aux["L"][k], self.aux["P"][k], self.aux["A"][k])
             
             de_dab = np.concatenate([de_dalpha, de_dbeta], axis=-1)
             dM_dab = np.concatenate([dM_dalpha, dM_dbeta], axis=-1)
-            if formulation == "PredErr":
+            if self.formulation == "PredErr":
                 gradient_k = 2 * de_dab.T @ e
                 hessian_k = 2 * de_dab.T @ de_dab
             else:
@@ -206,34 +210,25 @@ class OPTKF:
                 hessian_k = 2 * np.linalg.multi_dot([ (dMe+Mde).T, S, dMe+Mde  ])
             gradient = gradient + gradient_k
             hessian = hessian + hessian_k
-        self.delete_unecessary(aux)
+        self.delete_unecessary()
         self.rtimes["cost_derivatives"] += time() - t0
         self.ncall["cost_derivatives"] += 1
         return gradient, hessian
-    
-    def prepareQP(self, xbar, gradient, hessian, pen_step=0, L2reg=0.):
-        I = np.eye(len(xbar))
-        Q = hessian + 2* pen_step * I
-        p = gradient - Q @ xbar
-        Q = Q + 2 * L2reg * I
-        return Q, p
-    
-    def delete_unecessary(self,aux):
-        del aux["x"]
-        del aux["S"]
-        del aux["P"]
-        del aux["A"]
-        del aux["b"]
-        del aux["L"]
+      
+    def delete_unecessary(self):
+        del self.aux["x"]
+        del self.aux["S"]
+        del self.aux["P"]
+        del self.aux["A"]
+        del self.aux["b"]
+        del self.aux["L"]
 
-    def cost(self, alpha, beta, formulation, aux=None):
+    def cost(self, alpha, beta):
         t0 = time()
-        if aux is None:
-            aux = self.kalman_simulate(alpha, beta)
-        value = cost_eval(aux["M"], aux["e"], aux["logdetS"], alpha, beta, formulation, L2pen=self.problem.L2pen)
+        value = cost_eval(self.aux["M"], self.aux["e"], self.aux["logdetS"], alpha, beta, self.formulation, L2pen=self.problem.L2pen)
         self.rtimes["cost_eval"] += time() - t0
         self.ncall["cost_eval"] += 1
-        return aux, value
+        return value
     
     def eval_kkt_error(self, ab, gradient, multiplier):
         kkt_error =  gradient + self.derineqconstraints(ab, 0).full().T @ multiplier
@@ -261,98 +256,92 @@ class OPTKF:
         self.ncall["QP"] += 1
         return x, lam, der
     
-    def scale(self, alpha, beta, aux=None):
-        if aux is None:
-            aux = self.kalman_simulate(alpha, beta)
+    def scale(self):
         dimension = self.N * self.model.ny
-        lamb = np.sum(aux["e"][:, np.newaxis] @ aux["M"] @ aux["e"][..., np.newaxis]) / dimension
-        aux["M"] = aux["M"] / lamb # TODO
-        aux["P"] = aux["P"] * lamb
-        aux["S"] = aux["S"] * lamb
-        aux["logdetS"] = aux["logdetS"] + dimension * np.log(lamb)
-        new_beta = beta * lamb
-        return aux, new_beta
+        lamb = np.sum(self.aux["e"][:, np.newaxis] @ self.aux["M"] @ self.aux["e"][..., np.newaxis]) / dimension
+        self.aux["M"] = self.aux["M"] / lamb # TODO
+        self.aux["P"] = self.aux["P"] * lamb
+        self.aux["S"] = self.aux["S"] * lamb
+        self.aux["logdetS"] = self.aux["logdetS"] + dimension * np.log(lamb)
+        return lamb
 
     def end_message(self, termination, der, tol_direction):
+        if not self.verbose:
+            return
         if termination == "non-descending direction":
             print(
                         f"non-descendent direction, der={der:.2e}, tol={tol_direction:.2e}")
 
-    def SQP_kalman(self, alpha0, beta0, formulation, opts={}, verbose=True, rescale=True):
-        if formulation not in ["MLE", "PredErr"]:
-            raise ValueError("Formulation {} is unknown. Choose between 'MLE' or 'PredError'".format(formulation))
+    def SQP_kalman(self, alpha0, beta0):
         t0 = time()
-        options = self.complete_opts(opts)
         nalpha = self.model.nalpha
         alphaj = alpha0.copy()
         betaj = beta0.copy()
-        aux, cost = self.cost(alphaj, betaj, formulation)
+        self.kalman_simulate(alphaj, betaj)
+        cost = self.cost(alphaj, betaj)
+        betaj = betaj * self.scale()
         objective_scale = 1.
-        tol_direction = objective_scale * options["tol.direction"]
+        tol_direction = objective_scale * self.opts["tol.direction"]
         niter = 0
         termination = "maxiter"
-        for j in range(options["maxiter"]):
-            if rescale:
-                aux, betaj = self.scale(alphaj, betaj, aux=aux)
-                aux, cost = self.cost(alphaj, betaj, formulation, aux=aux)
-            gradient, hessian = self.cost_derivatives(aux, alphaj, betaj, formulation)
+        for j in range(self.opts["maxiter"]):
+            gradient, hessian = self.cost_derivatives(alphaj, betaj)
             ab = np.concatenate([alphaj, betaj])
-            Q, p = self.prepareQP(ab, gradient, hessian, pen_step=options["pen_step"], L2reg=self.problem.L2pen)
             linconstr = self.make_lin_constr(ab)
             lin_eqconstr = self.make_lin_eqconstr(ab)
+            Q, p = prepareQP(ab, gradient, hessian, pen_step=self.opts["pen_step"], L2reg=self.problem.L2pen)
             ab_next, multiplier, der = self.solveQP(Q, p, linconstr, lin_eqconstr, ab)
             alpha_next, beta_next = ab_next[:nalpha], ab_next[nalpha:]
             # self.verif(gradient, alphaj, betaj, formulation)
             # if np.any(beta_next<0.):
             #     print(f"beta {betaj}, betanext {beta_next}")
-            # kkt_error = self.eval_kkt_error(ab, gradient, multiplier)
-            # if kkt_error < options["tol.kkt"]:
-            #     termination = "tol.kkt"
-            #     break
+            kkt_error = self.eval_kkt_error(ab, gradient, multiplier)
+            if kkt_error < self.opts["tol.kkt"]:
+                termination = "tol.kkt"
+                break
             if der < tol_direction:
                 termination = "tol.direction"
                 if der < - tol_direction:
                     termination = "non-descending direction"
                 break
-            if verbose:
+            if self.verbose:
                 print(f"Iteration {j+1}, Current cost {cost:2e}, direction {der:2e}")
-            tau, new_cost, aux = self.globalization(alphaj, betaj, alpha_next, beta_next, der, cost, formulation,
-                                            options["globalization.maxiter"], options["globalization.gamma"], options["globalization.beta"],
-                                            verbose=verbose)
+            tau, new_cost = self.globalization(alphaj, betaj, alpha_next, beta_next, der, cost,
+                                            self.opts["globalization.maxiter"], self.opts["globalization.gamma"], self.opts["globalization.beta"])
             niter += 1
-            if aux is None:
+            if tau is None:
                 termination = "globalization.maxiter"
                 break
-            if cost - new_cost < max(abs(cost),abs(new_cost)) * options["rtol.cost_decrease"]:
+            if cost - new_cost < max(abs(cost),abs(new_cost)) * self.opts["rtol.cost_decrease"]:
                 termination = "rtol.cost_decrease"
                 break
             alphaj = (1 - tau) * alphaj + tau * alpha_next
             betaj = (1 - tau) * betaj + tau * beta_next
+            if self.rescale:
+                betaj = betaj * self.scale()
             cost = new_cost
-        if rescale:
-            aux, betaj = self.scale(alphaj, betaj, aux=aux)
-            aux, cost = self.cost(alphaj, betaj, formulation, aux=aux)
-        if verbose:
-            self.end_message(termination, der, tol_direction)
+        
+        self.end_message(termination, der, tol_direction)
         self.rtimes["total"] += time() - t0
         self.ncall["total"] += 1
         stats =  {"termination":termination, "niter":niter, "rtimes":self.rtimes, "ncall":self.ncall}
         stats["return_status"] = stats["termination"]
         return alphaj, betaj, stats
 
-    def globalization(self, alpha0, beta0, alpha1, beta1, der, cost, formulation, maxiter, gamma, b, verbose=False):
+    def globalization(self, alpha0, beta0, alpha1, beta1, der, cost, maxiter, gamma, b):
         tau = 1.
         for i_glob in range(maxiter):
             alpha_middle = (1 - tau) * alpha0 + tau * alpha1
             beta_middle = (1 - tau) * beta0 + tau * beta1
-            aux, cost_middle = self.cost(alpha_middle, beta_middle, formulation)
+            self.kalman_simulate(alpha_middle, beta_middle)
+            cost_middle = self.cost(alpha_middle, beta_middle)
             condition = (cost - cost_middle) / tau > gamma * der and np.all(beta_middle >= 0.)
             if condition:
-                    if verbose: print(f" tau = {tau}")
-                    return tau, cost_middle, aux
+                    if self.verbose: print(f" tau = {tau}")
+                    return tau, cost_middle
             tau = tau * b
-        if verbose: print("Globalization did not finish with tau = {}".format(tau))
-        return tau, cost, None
+        if self.verbose: print("Globalization did not finish with tau = {}".format(tau))
+        return None, cost
 
     # def cost_derivatives_fd(self, alpha, beta, formulation, dalpha, dbeta):
     #     eps = 1e-5
@@ -383,6 +372,13 @@ def cost_eval(Ms, es, logdet, alpha, beta, formulation, L2pen=0.):
     value = value + L2pen * (np.sum( alpha**2 ) + np.sum(beta**2 ))
     return value
 
+def prepareQP(xbar, gradient, hessian, pen_step=0, L2reg=0.):
+    I = np.eye(len(xbar))
+    Q = hessian + 2* pen_step * I
+    p = gradient - Q @ xbar
+    Q = Q + 2 * L2reg * I
+    return Q, p
+    
 def kalman_step(A, b, C, Q, R, P, x, y, inds_tri):
     PC = P @ C.T
     S = C @ PC + R

@@ -294,11 +294,11 @@ class ProblemParser:
         if algorithm == "SQP":
                 from .kalmanSQP import OPTKF
                 eqconstr = rescale & (formulation == "PredErr")
-                optkalman = OPTKF(self, eqconstr=eqconstr)
+                optkalman = OPTKF(self, formulation, opts=opts, rescale=rescale, verbose=verbose, eqconstr=eqconstr)
                 optkalman.prepare()
                 optkalman.rinit()
                 alpha, beta, stats = \
-                    optkalman.SQP_kalman(alpha0, beta0, formulation, opts=opts, verbose=verbose, rescale=rescale)
+                    optkalman.SQP_kalman(alpha0, beta0)
         elif algorithm == "IPOPT":
             clean_opts_for_ipopt(opts)
             from .kalmanIPOPT import nlp_kalman_solve
