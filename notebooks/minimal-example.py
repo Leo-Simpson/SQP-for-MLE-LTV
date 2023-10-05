@@ -85,7 +85,10 @@ h_fn = ca.Function("h", [alpha_symbol, beta_symbol], [h_symbol])
 model_true = ModelParser(xplus_fn, y_fn, Q_fn, R_fn)
 
 alpha_true = rng.random(model_true.nalpha)* alpha_max # choose a "true parameter randomly"
-beta_true = np.array([1e-1, 1e-2]) # Q, R
+beta_true = np.ones(model_true.nbeta)
+beta_true[0] = 1e-1
+beta_true[1] = 1e-2
+alpha_true
 
 # %%
 x0 = np.zeros(model_true.nx)
@@ -133,26 +136,32 @@ alpha0 = rng.random(model.nalpha)* alpha_max
 # %%
 formulation = "MLE" # can be "MLE", "PredErr"
 algorithm = "SQP" # can be "SQP" or "IPOPT"
-
-opts = {"pen_step":1e-4, "maxiter":20, "tol.direction":0., "tol.kkt":1e-8, "einsum":False} # parameters of the SQP method
+opts = {"pen_step":1e-10} # parameters of the SQP method
 
 # %%
 t0 = time()
 
 alpha_found, beta_found, stats = problemTrain.solve(alpha0, beta0,
-                                                    formulation, algorithm, opts=opts, verbose=False)
+                                                    formulation, algorithm, opts=opts, verbose=True, rescale=True)
 rtime = time() - t0
 print("running time : {:.2e}  status : {}".format(rtime, stats["return_status"]))
 
 # %%
-#print( alpha_true, alpha_found)
-#print(beta_true, beta_found)
-e_alpha = np.linalg.norm(alpha_true-alpha_found)
-e_beta = np.linalg.norm(beta_true-beta_found)
+print( alpha_true, alpha_found)
+print(beta_true, beta_found)
+
+# %%
+e_alpha = np.linalg.norm((alpha_true-alpha_found)[:2])
+e_beta = np.linalg.norm((beta_true-beta_found)[:2])
 print(f"error on alpha : {e_alpha:.2e}   ,  error on beta : {e_beta:.2e}")
 
 # %%
-if "rtimes" in stats.keys(): print(stats["rtimes"])
+if "rtimes" in stats.keys():
+    print(stats["rtimes"])
+    print(stats["ncall"])
+
+# %%
+stats["termination"]
 
 # %% [markdown]
 # ### Validation on out-of-sample data 
