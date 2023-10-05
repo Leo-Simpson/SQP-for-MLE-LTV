@@ -151,7 +151,7 @@ class OPTKF:
         Ms = np.empty( (self.N, self.model.ny, self.model.ny) )
         Ss = np.empty( (self.N, self.model.ny, self.model.ny) )
         Ps = np.empty( (self.N+1, self.model.nx, self.model.nx) )
-        logdetSs = np.empty( (self.N) )
+        logdetS = 0.
         es = np.empty( (self.N, self.model.ny) )
         xs = np.empty( (self.N+1, self.model.nx) )
         As, bs = self.get_AbC(alpha)
@@ -160,14 +160,15 @@ class OPTKF:
         xs[0] = self.problem.x0
         Ps[0] = self.problem.P0
         for k in range(self.N):
-            Ss[k], logdetSs[k], Ms[k], Ls[k], es[k], xs[k+1], Ps[k+1] = \
+            Ss[k], logdetSk, Ms[k], Ls[k], es[k], xs[k+1], Ps[k+1] = \
                 kalman_step(
                     As[k], bs[k], self.C, Q, R,
                     Ps[k], xs[k], self.problem.ys[k],
                     self.inds_tri_M)
 
+            logdetS = logdetS + logdetSk
         auxvar = {
-               "P":Ps, "L":Ls, "M":Ms, "S":Ss, "logdetS":logdetSs,
+               "P":Ps, "L":Ls, "M":Ms, "S":Ss, "logdetS":logdetS,
                "A" : As, "b": bs,
                "e" : es, "x":xs
         }
@@ -383,10 +384,10 @@ class OPTKF:
     #     print(f"verif dbeta : fd = {fd_beta:.2e}, ad = {ad_beta:.2e}, dif = {(fd_beta-ad_beta):.2e}")
 
 # utils
-def cost_eval(Ms, es, logdets, alpha, beta, formulation, L2pen=0.):
+def cost_eval(Ms, es, logdet, alpha, beta, formulation, L2pen=0.):
     if formulation=="MLE":
         value1 = np.sum(es[:, np.newaxis] @ Ms @ es[..., np.newaxis])
-        value = value1 + np.sum( logdets )
+        value = value1 + logdet
     elif formulation=="PredErr":
         value = np.sum( es**2 )
     value = value + L2pen * (np.sum( alpha**2 ) + np.sum(beta**2 ))
