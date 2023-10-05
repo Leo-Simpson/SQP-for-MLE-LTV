@@ -5,9 +5,10 @@ from .misc import symmetrize, symmetrize, psd_inverse
 
 default_opts = {"maxiter":50,
           "pen_step":1e-4,
-          "tol.kkt":1e-6,
-          "tol.direction":1e-6,
-          "rtol.cost_decrease":1e-6,
+          "pen_step":1e-5,
+          "tol.kkt":1e-5,
+          "tol.direction":1e-5,
+          "rtol.cost_decrease":1e-5,
           "globalization.maxiter":20,
           "globalization.beta":0.8,
           "globalization.gamma":0.1,
@@ -271,7 +272,8 @@ class OPTKF:
                 alphas.append(alphaj)
                 betas.append(betaj)
             if rescale:
-                betaj = betaj * self.scale(alphaj, betaj, aux=aux)
+                aux, betaj = self.scale(alphaj, betaj, aux=aux)
+                aux, cost = self.cost(alphaj, betaj, formulation) # TODO : add aux = aux
             gradient, hessian = self.cost_derivatives(aux, alphaj, betaj, formulation)
             # self.verif(gradient, alphaj, betaj, formulation)
             ab = np.concatenate([alphaj, betaj])
@@ -328,7 +330,8 @@ class OPTKF:
             return alphas, betas
 
         if rescale:
-            betaj = betaj *self.scale(alphaj, betaj)
+            aux, betaj = self.scale(alphaj, betaj)
+            aux, cost = self.cost(alphaj, betaj, formulation, aux=aux)
         self.rtimes["total"] += time() - t0
         self.ncall["total"] += 1
         stats =  {"termination":termination, "niter":niter, "rtimes":self.rtimes, "ncall":self.ncall}
@@ -351,9 +354,14 @@ class OPTKF:
     def scale(self, alpha, beta, aux=None):
         if aux is None:
             aux = self.kalman_simulate(alpha, beta)
-        dimension = (self.N+1) * self.model.ny
+        dimension = self.N * self.model.ny
         lamb = np.sum(aux["e"][:, np.newaxis] @ aux["M"] @ aux["e"][..., np.newaxis]) / dimension
-        return lamb
+        aux["M"] = aux["M"] / lamb # TODO
+        aux["P"] = aux["P"] * lamb
+        aux["S"] = aux["S"] * lamb
+        aux["logdetS"] = aux["logdetS"] + dimension * np.log(lamb)
+        new_beta = beta * lamb
+        return aux, new_beta
 
     # def cost_derivatives_fd(self, alpha, beta, formulation, dalpha, dbeta):
     #     eps = 1e-5
