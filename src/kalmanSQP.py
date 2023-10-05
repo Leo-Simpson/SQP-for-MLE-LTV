@@ -210,7 +210,14 @@ class OPTKF:
         self.rtimes["cost_derivatives"] += time() - t0
         self.ncall["cost_derivatives"] += 1
         return gradient, hessian
-            
+    
+    def prepareQP(self, xbar, gradient, hessian, pen_step=0, L2reg=0.):
+        I = np.eye(len(xbar))
+        Q = hessian + 2* pen_step * I
+        p = gradient - Q @ xbar
+        Q = Q + 2 * L2reg * I
+        return Q, p
+    
     def delete_unecessary(self,aux):
         del aux["x"]
         del aux["S"]
@@ -253,8 +260,25 @@ class OPTKF:
         self.rtimes["QP"] += time() - t0
         self.ncall["QP"] += 1
         return x, lam, der
+    
+    def scale(self, alpha, beta, aux=None):
+        if aux is None:
+            aux = self.kalman_simulate(alpha, beta)
+        dimension = self.N * self.model.ny
+        lamb = np.sum(aux["e"][:, np.newaxis] @ aux["M"] @ aux["e"][..., np.newaxis]) / dimension
+        aux["M"] = aux["M"] / lamb # TODO
+        aux["P"] = aux["P"] * lamb
+        aux["S"] = aux["S"] * lamb
+        aux["logdetS"] = aux["logdetS"] + dimension * np.log(lamb)
+        new_beta = beta * lamb
+        return aux, new_beta
 
-    def SQP_kalman(self, alpha0, beta0, formulation, opts={}, verbose=True, path=False, rescale=True):
+    def end_message(self, termination, der, tol_direction):
+        if termination == "non-descending direction":
+            print(
+                        f"non-descendent direction, der={der:.2e}, tol={tol_direction:.2e}")
+
+    def SQP_kalman(self, alpha0, beta0, formulation, opts={}, verbose=True, rescale=True):
         if formulation not in ["MLE", "PredErr"]:
             raise ValueError("Formulation {} is unknown. Choose between 'MLE' or 'PredError'".format(formulation))
         t0 = time()
@@ -265,73 +289,51 @@ class OPTKF:
         aux, cost = self.cost(alphaj, betaj, formulation)
         objective_scale = 1.
         tol_direction = objective_scale * options["tol.direction"]
-        if path:
-            alphas, betas = [], []
+        niter = 0
+        termination = "maxiter"
         for j in range(options["maxiter"]):
-            if path:
-                alphas.append(alphaj)
-                betas.append(betaj)
             if rescale:
                 aux, betaj = self.scale(alphaj, betaj, aux=aux)
-                aux, cost = self.cost(alphaj, betaj, formulation) # TODO : add aux = aux
+                aux, cost = self.cost(alphaj, betaj, formulation, aux=aux)
             gradient, hessian = self.cost_derivatives(aux, alphaj, betaj, formulation)
-            # self.verif(gradient, alphaj, betaj, formulation)
             ab = np.concatenate([alphaj, betaj])
-            hessian_ = hessian + 2*options["pen_step"]* np.eye(len(ab))
-            grad0 = gradient - hessian_ @ ab
-            hessian_ = hessian_ + 2*self.problem.L2pen * np.eye(len(ab))
+            Q, p = self.prepareQP(ab, gradient, hessian, pen_step=options["pen_step"], L2reg=self.problem.L2pen)
             linconstr = self.make_lin_constr(ab)
             lin_eqconstr = self.make_lin_eqconstr(ab)
-            ab_next, multiplier, der = self.solveQP(hessian_, grad0, linconstr, lin_eqconstr, ab)
+            ab_next, multiplier, der = self.solveQP(Q, p, linconstr, lin_eqconstr, ab)
             alpha_next, beta_next = ab_next[:nalpha], ab_next[nalpha:]
-            if np.any(beta_next<0.):
-                print(f"beta {betaj}, betanext {beta_next}")
-            kkt_error = self.eval_kkt_error(ab, gradient, multiplier)
-            
-            if kkt_error < options["tol.kkt"]:
-                termination = "tol.kkt"
-                niter = j
-                break
+            # self.verif(gradient, alphaj, betaj, formulation)
+            # if np.any(beta_next<0.):
+            #     print(f"beta {betaj}, betanext {beta_next}")
+            # kkt_error = self.eval_kkt_error(ab, gradient, multiplier)
+            # if kkt_error < options["tol.kkt"]:
+            #     termination = "tol.kkt"
+            #     break
             if der < tol_direction:
                 termination = "tol.direction"
-                niter = j
                 if der < - tol_direction:
                     termination = "non-descending direction"
-                    niter = j
-                    if verbose:
-                        print(
-                        f"non-descendent direction, der={der:.2e}, tol={tol_direction:.2e}")
                 break
             if verbose:
-                print(f"Iteration {j}, Current cost {cost:2e}, kkt error {kkt_error:2e}, direction {der:2e}")
+                print(f"Iteration {j+1}, Current cost {cost:2e}, direction {der:2e}")
             tau, new_cost, aux = self.globalization(alphaj, betaj, alpha_next, beta_next, der, cost, formulation,
                                             options["globalization.maxiter"], options["globalization.gamma"], options["globalization.beta"],
                                             verbose=verbose)
+            niter += 1
             if aux is None:
                 termination = "globalization.maxiter"
-                niter = j+1
                 break
             if cost - new_cost < max(abs(cost),abs(new_cost)) * options["rtol.cost_decrease"]:
                 termination = "rtol.cost_decrease"
-                niter = j+1
                 break
-            if verbose:
-                print("tau", tau)
             alphaj = (1 - tau) * alphaj + tau * alpha_next
             betaj = (1 - tau) * betaj + tau * beta_next
             cost = new_cost
-        if j == options["maxiter"]-1:
-            niter = options["maxiter"]
-            termination = "maxiter"
-
-        if path:
-            alphas.append(alphaj)
-            betas.append(betaj)
-            return alphas, betas
-
         if rescale:
-            aux, betaj = self.scale(alphaj, betaj)
+            aux, betaj = self.scale(alphaj, betaj, aux=aux)
             aux, cost = self.cost(alphaj, betaj, formulation, aux=aux)
+        if verbose:
+            self.end_message(termination, der, tol_direction)
         self.rtimes["total"] += time() - t0
         self.ncall["total"] += 1
         stats =  {"termination":termination, "niter":niter, "rtimes":self.rtimes, "ncall":self.ncall}
@@ -346,22 +348,11 @@ class OPTKF:
             aux, cost_middle = self.cost(alpha_middle, beta_middle, formulation)
             condition = (cost - cost_middle) / tau > gamma * der and np.all(beta_middle >= 0.)
             if condition:
+                    if verbose: print(f" tau = {tau}")
                     return tau, cost_middle, aux
             tau = tau * b
         if verbose: print("Globalization did not finish with tau = {}".format(tau))
         return tau, cost, None
-
-    def scale(self, alpha, beta, aux=None):
-        if aux is None:
-            aux = self.kalman_simulate(alpha, beta)
-        dimension = self.N * self.model.ny
-        lamb = np.sum(aux["e"][:, np.newaxis] @ aux["M"] @ aux["e"][..., np.newaxis]) / dimension
-        aux["M"] = aux["M"] / lamb # TODO
-        aux["P"] = aux["P"] * lamb
-        aux["S"] = aux["S"] * lamb
-        aux["logdetS"] = aux["logdetS"] + dimension * np.log(lamb)
-        new_beta = beta * lamb
-        return aux, new_beta
 
     # def cost_derivatives_fd(self, alpha, beta, formulation, dalpha, dbeta):
     #     eps = 1e-5
