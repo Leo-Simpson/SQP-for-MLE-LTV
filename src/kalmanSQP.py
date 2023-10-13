@@ -43,10 +43,18 @@ class OPTKF:
         self.verbose = verbose
         self.rescale = rescale
         self.opts = self.complete_opts(opts)
-        self.make_constr(eqconstr=eqconstr)
         self.nM = int(self.model.ny * (self.model.ny + 1) / 2)
         self.nP = int(self.model.nx * (self.model.nx + 1) / 2)
-        self.nab = self.model.nalpha + self.model.nbeta
+        self.nalpha = self.model.nalpha
+        self.nbeta = self.model.nbeta
+        self.nab = self.nalpha + self.nbeta 
+        
+        self.make_constr(eqconstr=eqconstr)
+        # prepare linearizing functions
+        self.A_fns, self.b_fns, self.C, self.dA_fns, self.db_fns = self.problem.gradient_dyna_fn()
+        self.dQ_fn, self.dR_fn = self.model.gradient_covariances_fn()
+        self.inds_tri_M = np.tri(self.model.ny, k=-1, dtype=bool) # used to be np.bool
+        
         self.rinit()
         if formulation not in ["MLE", "PredErr"]:
             raise ValueError("Formulation {} is unknown. Choose between 'MLE' or 'PredError'".format(formulation))
@@ -60,12 +68,11 @@ class OPTKF:
         self.rtimes = {key:0 for key in fn_names}
         self.ncall = {key:0 for key in fn_names}
 
-    def linearized_fn(self):
-        t0 = time()
-        self.A_fns, self.b_fns, self.C, self.dA_fns, self.db_fns = self.problem.gradient_dyna_fn()
-        self.dQ_fn, self.dR_fn = self.model.gradient_covariances_fn()
-        self.rtimes["linearized_fn"] += time() - t0
-        self.ncall["linearized_fn"] += 1
+    def complete_opts(self, opts):
+        options = default_opts.copy()
+        for key, item in opts.items():
+            options[key] = item
+        return options
             
     def make_constr(self, eqconstr=True):
         alpha = ca.SX.sym("alpha_sym", self.model.nalpha)
@@ -84,29 +91,18 @@ class OPTKF:
             self.eqconstr = None
 
     def make_lin_constr(self, ab):
+        # inequality constraints
         Gconstr = - self.derineqconstraints(ab, 0).full()
         hconstr = self.ineqconstraints(ab).full().squeeze() + Gconstr @ ab
-        return Gconstr, hconstr
-
-    def make_lin_eqconstr(self, ab):
+        ineq = (Gconstr, hconstr)
+        # equatlity constraints
         if self.eqconstr is None:
-            return None
-        Aconstr = -self.dereqconstraints(ab, 0).full()
-        bconstr = self.eqconstr(ab).full().squeeze() + Aconstr @ ab
-        return Aconstr, bconstr
-
-    def prepare(self):
-        t0 = time()
-        self.linearized_fn()
-        self.inds_tri_M = np.tri(self.model.ny, k=-1, dtype=np.bool)
-        self.rtimes["prepare"] += time() - t0
-        self.ncall["prepare"] += 1
-
-    def complete_opts(self, opts):
-        options = default_opts.copy()
-        for key, item in opts.items():
-            options[key] = item
-        return options
+            eq = None
+        else:
+            Aconstr = -self.dereqconstraints(ab, 0).full()
+            bconstr = self.eqconstr(ab).full().squeeze() + Aconstr @ ab
+            eq = (Aconstr, bconstr)
+        return ineq, eq
 
     def get_AbC(self, alpha):
         t0 = time()
@@ -265,70 +261,59 @@ class OPTKF:
         self.aux["logdetS"] = self.aux["logdetS"] + dimension * np.log(lamb)
         return lamb
 
-    def end_message(self, termination, der, tol_direction):
-        if not self.verbose:
-            return
-        if termination == "non-descending direction":
-            print(
-                        f"non-descendent direction, der={der:.2e}, tol={tol_direction:.2e}")
+    def stepSQP(self, alpha, beta, prev_cost):
+        gradient, hessian = self.cost_derivatives(alpha, beta)
+        ab = np.concatenate([alpha, beta])
+        linconstr, lin_eqconstr = self.make_lin_constr(ab)
+        Q, p = prepareQP(ab, gradient, hessian, pen_step=self.opts["pen_step"], L2reg=self.problem.L2pen)
+        ab_next, multiplier, der = self.solveQP(Q, p, linconstr, lin_eqconstr, ab)
+        alpha_next, beta_next = ab_next[:self.nalpha], ab_next[self.nalpha:]
+        kkt_error = self.eval_kkt_error(ab, gradient, multiplier)
+        termination = None
+        if der < 0.:
+            termination = f"non-descending direction : derivative={der:.2e}"
+        else:
+            tau, new_cost = self.line_search(alpha, beta, alpha_next, beta_next, der, prev_cost,
+                                            self.opts["globalization.maxiter"], self.opts["globalization.gamma"], self.opts["globalization.beta"])
+            if kkt_error < self.opts["tol.kkt"]:
+                termination = f"tol.kkt : kkt error= {kkt_error:.2e}"
+            elif der < self.opts["tol.direction"]:
+                termination = f"tol.direction, derivative={der:.2e}"
+            elif prev_cost - new_cost < max(abs(prev_cost),abs(new_cost)) * self.opts["rtol.cost_decrease"]:
+                termination = f"rtol.cost_decrease, cost decrease = {prev_cost - new_cost:.2e}"
+            elif tau is None:
+                termination = "globalization.maxiter"
+                tau = 0.
+        alpha = (1 - tau) * alpha + tau * alpha_next
+        beta = (1 - tau) * beta + tau * beta_next
+        if self.rescale:
+            beta = beta * self.scale()
+        return alpha, beta, new_cost, termination
 
     def SQP_kalman(self, alpha0, beta0):
         t0 = time()
-        nalpha = self.model.nalpha
         alphaj = alpha0.copy()
         betaj = beta0.copy()
         self.kalman_simulate(alphaj, betaj)
         cost = self.cost(alphaj, betaj)
-        betaj = betaj * self.scale()
-        objective_scale = 1.
-        tol_direction = objective_scale * self.opts["tol.direction"]
-        niter = 0
+        if self.rescale:
+            betaj = betaj * self.scale()
         termination = "maxiter"
         for j in range(self.opts["maxiter"]):
-            gradient, hessian = self.cost_derivatives(alphaj, betaj)
-            ab = np.concatenate([alphaj, betaj])
-            linconstr = self.make_lin_constr(ab)
-            lin_eqconstr = self.make_lin_eqconstr(ab)
-            Q, p = prepareQP(ab, gradient, hessian, pen_step=self.opts["pen_step"], L2reg=self.problem.L2pen)
-            ab_next, multiplier, der = self.solveQP(Q, p, linconstr, lin_eqconstr, ab)
-            alpha_next, beta_next = ab_next[:nalpha], ab_next[nalpha:]
-            # self.verif(gradient, alphaj, betaj, formulation)
-            # if np.any(beta_next<0.):
-            #     print(f"beta {betaj}, betanext {beta_next}")
-            kkt_error = self.eval_kkt_error(ab, gradient, multiplier)
-            if kkt_error < self.opts["tol.kkt"]:
-                termination = "tol.kkt"
-                break
-            if der < tol_direction:
-                termination = "tol.direction"
-                if der < - tol_direction:
-                    termination = "non-descending direction"
-                break
+            alphaj, betaj, cost, termination  = self.stepSQP(alphaj, betaj, cost)
             if self.verbose:
-                print(f"Iteration {j+1}, Current cost {cost:2e}, direction {der:2e}")
-            tau, new_cost = self.globalization(alphaj, betaj, alpha_next, beta_next, der, cost,
-                                            self.opts["globalization.maxiter"], self.opts["globalization.gamma"], self.opts["globalization.beta"])
-            niter += 1
-            if tau is None:
-                termination = "globalization.maxiter"
+                print(f"Iteration {j+1}, Current cost {cost:2e}")
+            if termination is not None:
                 break
-            if cost - new_cost < max(abs(cost),abs(new_cost)) * self.opts["rtol.cost_decrease"]:
-                termination = "rtol.cost_decrease"
-                break
-            alphaj = (1 - tau) * alphaj + tau * alpha_next
-            betaj = (1 - tau) * betaj + tau * beta_next
-            if self.rescale:
-                betaj = betaj * self.scale()
-            cost = new_cost
-        
-        self.end_message(termination, der, tol_direction)
+        if self.verbose:
+            print("termination :", termination)
         self.rtimes["total"] += time() - t0
         self.ncall["total"] += 1
-        stats =  {"termination":termination, "niter":niter, "rtimes":self.rtimes, "ncall":self.ncall}
+        stats =  {"termination":termination, "niter":j+1, "rtimes":self.rtimes, "ncall":self.ncall}
         stats["return_status"] = stats["termination"]
         return alphaj, betaj, stats
 
-    def globalization(self, alpha0, beta0, alpha1, beta1, der, cost, maxiter, gamma, b):
+    def line_search(self, alpha0, beta0, alpha1, beta1, der, cost, maxiter, gamma, b):
         tau = 1.
         for i_glob in range(maxiter):
             alpha_middle = (1 - tau) * alpha0 + tau * alpha1

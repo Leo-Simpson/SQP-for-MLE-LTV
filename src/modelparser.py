@@ -295,8 +295,6 @@ class ProblemParser:
                 from .kalmanSQP import OPTKF
                 eqconstr = rescale & (formulation == "PredErr")
                 optkalman = OPTKF(self, formulation, opts=opts, rescale=rescale, verbose=verbose, eqconstr=eqconstr)
-                optkalman.prepare()
-                optkalman.rinit()
                 alpha, beta, stats = \
                     optkalman.SQP_kalman(alpha0, beta0)
         elif algorithm == "IPOPT":
