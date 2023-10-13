@@ -1,5 +1,7 @@
 import casadi as ca #type: ignore
 import numpy as np # type: ignore
+from qpsolvers import Problem as Problem_QP
+from qpsolvers import solve_problem as solve_qp
 from time import time
 from .misc import symmetrize, symmetrize, psd_inverse
 
@@ -42,7 +44,7 @@ class OPTKF:
 
         self.formulation = formulation
         self.verbose = verbose
-        self.rescale = rescale
+        self.do_rescale = rescale
         self.opts = self.complete_opts(opts)
         self.nM = int(self.model.ny * (self.model.ny + 1) / 2)
         self.nP = int(self.model.nx * (self.model.nx + 1) / 2)
@@ -212,15 +214,23 @@ class OPTKF:
         self.ncall["derivatives"] += 1
         return gradient, hessian
     
-    def scale(self, aux):
-        dimension = len(aux["e"]) * self.model.ny
-        lamb = np.sum(aux["e"][:, np.newaxis] @ aux["M"] @ aux["e"][..., np.newaxis]) / dimension
-        aux["M"] = aux["M"] / lamb # TODO
-        aux["P"] = aux["P"] * lamb
-        aux["S"] = aux["S"] * lamb
-        aux["logdetS"] = aux["logdetS"] + dimension * np.log(lamb)
-        return lamb
-
+    def rescale(self, auxs, cost):
+        s = 0.
+        dim = 0.
+        for aux in auxs:
+            dim = dim + len(aux["e"]) * self.model.ny
+            s = s + np.sum(aux["e"][:, np.newaxis] @ aux["M"] @ aux["e"][..., np.newaxis]) 
+        lamb = s / dim
+        if self.formulation == "MLE":
+            cost = dim *(1 + np.log(lamb)) + (cost - s) # (cost - s) is the logdetS, s / lamb is dim
+        for aux in auxs:
+            dimension = len(aux["e"]) * self.model.ny
+            aux["M"] = aux["M"] / lamb
+            aux["P"] = aux["P"] * lamb
+            aux["S"] = aux["S"] * lamb
+            aux["logdetS"] = aux["logdetS"] + dimension * np.log(lamb)
+        return lamb, auxs, cost
+    
     # function that looks at all data series
     def derivatives_all(self, alpha, beta, auxs):
         gradient, hessian = 0., 0.
@@ -230,7 +240,7 @@ class OPTKF:
             hessian = hessian + hessian_i
         return gradient, hessian
     
-    def cost(self, alpha, beta):
+    def evaluate(self, alpha, beta):
         # everytime one computes the cost, one also computes the simulation
         t0 = time()
         auxs, value = [], 0.
@@ -247,26 +257,27 @@ class OPTKF:
         kkt_error =  gradient + self.derineqconstraints(ab, 0).full().T @ multiplier
         return np.sum( abs(kkt_error))
 
-    def solveQP(self, Q, p, constr, eqconstr, x_start):
+    def solveQP(self, Q, p, constr, eqconstr, x_start, solver="proxqp"):
         """
             solve the QP:
-            minimize  0.5 *  x^T Q x  + p @ x
+            minimize  0.5 *  x^T s*Q x  + s*p @ x
             s.t. G x <= h,  Ax = b
         """
+        s = 0.5
         t0 = time()
-        from cvxopt import matrix, solvers #type: ignore
-        solvers.options['show_progress'] = False
         G, h = constr
         if eqconstr is None:
-            sol = solvers.qp(matrix(Q), matrix(p), matrix(G), matrix(h), initvals=matrix(x_start))
+            A, b = None, None
         else: 
             A, b = eqconstr
-            sol = solvers.qp(matrix(Q), matrix(p), matrix(G), matrix(h), matrix(A), matrix(b), initvals=matrix(x_start))
-        x = np.squeeze(np.array(sol["x"]))  
-        lam = np.squeeze(np.array(sol["z"]))
+        problem_QP = Problem_QP(s*Q, s*p, G, h, A, b)
+        sol = solve_qp(problem_QP, initvals=x_start, solver=solver, verbose=True)
+        x = sol.x 
+        lam = sol.z
         der = -(p + Q @ x_start) @ (x - x_start)
         self.rtimes["QP"] += time() - t0
         self.ncall["QP"] += 1
+        # print(f"sol = {sol.x}, primal residual {sol.primal_residual()}")
         return x, lam, der
     
     def line_search(self, alpha0, beta0, alpha1, beta1, der, cost, maxiter, gamma, b):
@@ -276,32 +287,16 @@ class OPTKF:
         for i_glob in range(maxiter):
             alpha_middle = (1 - tau) * alpha0 + tau * alpha1
             beta_middle = (1 - tau) * beta0 + tau * beta1
-            auxs_middle, cost_middle = self.cost(alpha_middle, beta_middle)
-            condition = (cost - cost_middle) / tau > gamma * der and np.all(beta_middle >= 0.)
-            if condition:
-                    if self.verbose: print(f" tau = {tau}")
-                    return auxs_middle, tau, cost_middle
+            if np.all(beta_middle >= 0.):
+                auxs_middle, cost_middle = self.evaluate(alpha_middle, beta_middle)
+                condition = (cost - cost_middle) / tau > gamma * der
+                if condition:
+                        if self.verbose: print(f" tau = {tau}")
+                        return auxs_middle, tau, cost_middle
             tau = tau * b
-        if self.verbose: print("Globalization did not finish with tau = {}".format(tau))
+        if self.verbose: print("Line-search did not finish with tau = {}".format(tau))
         return None, 0., cost
     
-    def stepSQP(self, alpha, beta, prev_cost, auxs):
-        gradient, hessian = self.derivatives_all(alpha, beta, auxs)
-        ab = np.concatenate([alpha, beta])
-        linconstr, lin_eqconstr = self.make_lin_constr(ab)
-        Q, p = prepareQP(ab, gradient, hessian, pen_step=self.opts["pen_step"], L2reg=self.L2pen)
-        ab_next, multiplier, der = self.solveQP(Q, p, linconstr, lin_eqconstr, ab)
-        alpha_next, beta_next = ab_next[:self.nalpha], ab_next[self.nalpha:]
-        kkt_error = self.eval_kkt_error(ab, gradient, multiplier)
-        auxs, tau, new_cost = self.line_search(alpha, beta, alpha_next, beta_next, der, prev_cost,
-                                            self.opts["globalization.maxiter"], self.opts["globalization.gamma"], self.opts["globalization.beta"])
-        alpha = (1 - tau) * alpha + tau * alpha_next
-        beta = (1 - tau) * beta + tau * beta_next
-        if self.rescale and (auxs is not None):
-            beta = beta * np.mean([self.scale(aux) for aux in auxs])
-        termination = self.get_termination(prev_cost, (auxs is None), der, kkt_error, new_cost)
-        return alpha, beta, new_cost, auxs, termination
-
     def get_termination(self, prev_cost, auxs_is_None, der, kkt_error, new_cost):
         if auxs_is_None:
             if der < 0.:
@@ -316,16 +311,35 @@ class OPTKF:
         else:
             return None
 
+    def stepSQP(self, alpha, beta, prev_cost, auxs):
+        gradient, hessian = self.derivatives_all(alpha, beta, auxs)
+        ab = np.concatenate([alpha, beta])
+        linconstr, lin_eqconstr = self.make_lin_constr(ab)
+        Q, p = prepareQP(ab, gradient, hessian, pen_step=self.opts["pen_step"], L2reg=self.L2pen)
+        ab_next, multiplier, der = self.solveQP(Q, p, linconstr, lin_eqconstr, ab)
+        alpha_next, beta_next = ab_next[:self.nalpha], ab_next[self.nalpha:]
+        kkt_error = self.eval_kkt_error(ab, gradient, multiplier)
+        auxs, tau, new_cost = self.line_search(alpha, beta, alpha_next, beta_next, der, prev_cost,
+                                            self.opts["globalization.maxiter"], self.opts["globalization.gamma"], self.opts["globalization.beta"])
+        alpha = (1 - tau) * alpha + tau * alpha_next
+        beta = (1 - tau) * beta + tau * beta_next
+        if self.do_rescale and (auxs is not None):
+            scale, auxs, new_cost = self.rescale(auxs, new_cost)
+            beta = beta * scale
+        termination = self.get_termination(prev_cost, (auxs is None), der, kkt_error, new_cost)
+        return alpha, beta, new_cost, auxs, termination
+
     def SQP_kalman(self, alpha0, beta0):
         t0 = time()
-        alphaj = alpha0.copy()
-        betaj = beta0.copy()
-        auxs, cost = self.cost(alphaj, betaj)
-        if self.rescale:
-            betaj = betaj * np.mean([self.scale(aux) for aux in auxs])
+        alpha = alpha0.copy()
+        beta = beta0.copy()
+        auxs, cost = self.evaluate(alpha, beta)
+        if self.do_rescale:
+            scale, auxs, cost = self.rescale(auxs, cost)
+            beta = beta * scale
         termination = "maxiter"
         for j in range(self.opts["maxiter"]):
-            alphaj, betaj, cost, auxs, termination  = self.stepSQP(alphaj, betaj, cost, auxs)
+            alpha, beta, cost, auxs, termination  = self.stepSQP(alpha, beta, cost, auxs)
             if self.verbose:
                 print(f"Iteration {j+1}, Current cost {cost:2e}")
             if termination is not None:
@@ -336,7 +350,7 @@ class OPTKF:
         self.ncall["total"] += 1
         stats =  {"termination":termination, "niter":j+1, "rtimes":self.rtimes, "ncall":self.ncall}
         stats["return_status"] = stats["termination"]
-        return alphaj, betaj, stats
+        return alpha, beta, stats
 
 # utils
 def delete_unecessary(aux):
