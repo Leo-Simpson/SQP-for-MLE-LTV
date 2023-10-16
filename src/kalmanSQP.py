@@ -3,7 +3,7 @@ import numpy as np # type: ignore
 from qpsolvers import Problem as Problem_QP
 from qpsolvers import solve_problem as solve_qp
 from time import time
-from .misc import symmetrize, symmetrize, psd_inverse
+from .misc import symmetrize, symmetrize, psd_inverse, select_jac
 
 default_opts = {"maxiter":50,
           "pen_step":1e-5,
@@ -38,10 +38,7 @@ class OPTKF:
 
     def __init__(self, problem, formulation, eqconstr=True, verbose=True, rescale=True, opts={}):
         self.model = problem.model
-        self.problem = problem
         self.L2pen = problem.L2pen
-        self.datas = [{"x0":problem.x0, "P0":problem.P0, "ys":problem.ys}]
-
         self.formulation = formulation
         self.verbose = verbose
         self.do_rescale = rescale
@@ -51,10 +48,18 @@ class OPTKF:
         self.nalpha = self.model.nalpha
         self.nbeta = self.model.nbeta
         self.nab = self.nalpha + self.nbeta 
-        
         self.make_constr(eqconstr=eqconstr)
-        # prepare linearizing functions
-        self.A_fns, self.b_fns, self.C, self.dA_fns, self.db_fns = problem.gradient_dyna_fn()
+        
+        self.datas = []
+        self.linearizing_fns = []
+        for (x0, P0, ys, us) in zip(problem.x0, problem.P0, problem.ys, problem.us):
+            data = {"x0":x0, "P0":P0, "ys":ys}
+            A_fns, b_fns, C, dA_fns, db_fns = gradient_dyna_fn(self.model, us, lti=problem.lti, no_u=problem.no_u) # prepare linearizing functions
+            lin_fns = {"A":A_fns, "b":b_fns, "dA":dA_fns, "db":db_fns, "C":C}
+            self.linearizing_fns.append(lin_fns)
+            self.datas.append(data)
+        self.N_data = len(self.datas)
+
         self.dQ_fn, self.dR_fn = self.model.gradient_covariances_fn()
         self.inds_tri_M = np.tri(self.model.ny, k=-1, dtype=bool) # used to be np.bool
         
@@ -107,27 +112,29 @@ class OPTKF:
             eq = (Aconstr, bconstr)
         return ineq, eq
 
-    def get_AbC(self, alpha):
+    def get_AbC(self, alpha, data_ind):
         t0 = time()
         # note that in the case of lti these lists are single value
         # furthermore, in the case of no_u, bs is empty
-        As = [A_fn(alpha).full() for A_fn in self.A_fns]
-        bs = [ b_fn(alpha).full().squeeze() for b_fn in self.b_fns ]
+        lin_fns = self.linearizing_fns[data_ind]
+        As = [A_fn(alpha).full() for A_fn in lin_fns["A"]]
+        bs = [ b_fn(alpha).full().squeeze() for b_fn in lin_fns["b"] ]
         self.rtimes["get_AbC"] += time() - t0
         self.ncall["get_AbC"] += 1
-        return As, bs
+        return As, bs, lin_fns["C"]
 
-    def get_dAb(self, alpha):
+    def get_dAbC(self, alpha, data_ind):
         t0 = time()
+        lin_fns = self.linearizing_fns[data_ind]
         dAs = [
             np.swapaxes(
                 dA_fn(alpha).full().reshape(self.model.nx, self.model.nx, self.model.nalpha),
                 0, 1)
-            for dA_fn in self.dA_fns]
-        dbs = [db_fn(alpha).full() for db_fn in self.db_fns]
+            for dA_fn in lin_fns["dA"]]
+        dbs = [db_fn(alpha).full() for db_fn in lin_fns["db"]]
         self.rtimes["get_dAb"] += time() - t0
         self.ncall["get_dAb"] += 1
-        return dAs, dbs
+        return dAs, dbs, lin_fns["C"]
     
     def get_dQR(self, beta):
         t0 = time()
@@ -140,9 +147,10 @@ class OPTKF:
         return dQ, dR
 
     # functions that look at only one data serie
-    def kalman_simulate(self, alpha, beta, data):
+    def kalman_simulate(self, alpha, beta, data_ind):
         t0 = time()
-        N = len(data["ys"])
+        ys = self.datas[data_ind]["ys"]
+        N = len(ys)
         Ls = np.empty( (N, self.model.nx, self.model.ny) )
         Ms = np.empty( (N, self.model.ny, self.model.ny) )
         Ss = np.empty( (N, self.model.ny, self.model.ny) )
@@ -150,18 +158,18 @@ class OPTKF:
         logdetS = 0.
         es = np.empty( (N, self.model.ny) )
         xs = np.empty( (N+1, self.model.nx) )
-        As, bs = self.get_AbC(alpha)
+        As, bs, C = self.get_AbC(alpha, data_ind)
         if len(As) == 1:
             As = As * N
             bs = bs * N
         Q, R = self.model.get_QR(beta)
-        xs[0] = data["x0"]
-        Ps[0] = data["P0"]
+        xs[0] = self.datas[data_ind]["x0"]
+        Ps[0] = self.datas[data_ind]["P0"]
         for k in range(N):
             Ss[k], logdetSk, Ms[k], Ls[k], es[k], xs[k+1], Ps[k+1] = \
                 kalman_step(
-                    As[k], bs[k], self.C, Q, R,
-                    Ps[k], xs[k], data["ys"][k],
+                    As[k], bs[k], C, Q, R,
+                    Ps[k], xs[k], ys[k],
                     self.inds_tri_M)
 
             logdetS = logdetS + logdetSk
@@ -174,12 +182,12 @@ class OPTKF:
         self.ncall["kalman_simulate"] += 1
         return aux
 
-    def derivatives(self, alpha, beta, aux):
+    def derivatives(self, alpha, beta, aux, data_ind):
         t0 = time()
         gradient, hessian = 0., 0.
         dx_dalpha, dP_dalpha = np.zeros((self.model.nx, self.model.nalpha)), np.zeros((self.model.nx, self.model.nx, self.model.nalpha))
         dx_dbeta, dP_dbeta = np.zeros((self.model.nx, self.model.nbeta)), np.zeros((self.model.nx, self.model.nx, self.model.nbeta))
-        dAs, dbs = self.get_dAb(alpha)
+        dAs, dbs, C = self.get_dAbC(alpha, data_ind)
         dQ, dR = self.get_dQR(beta)
         N = len(aux["e"])
         if len(dAs) == 1:
@@ -189,11 +197,11 @@ class OPTKF:
             e, M, S  = aux["e"][k], aux["M"][k], aux["S"][k]
             dM_dalpha, de_dalpha, dP_dalpha, dx_dalpha = \
                 kalman_step_dalpha(dx_dalpha, dP_dalpha, dAs[k], dbs[k],
-                                   e, M, S, self.C,
+                                   e, M, S, C,
                                    aux["x"][k], aux["L"][k], aux["P"][k], aux["A"][k])
             dM_dbeta, de_dbeta, dP_dbeta, dx_dbeta = \
                 kalman_step_dbeta(dx_dbeta, dP_dbeta, dQ, dR, 
-                                    e, M, S, self.C,
+                                    e, M, S, C,
                                     aux["x"][k], aux["L"][k], aux["P"][k], aux["A"][k])
             
             de_dab = np.concatenate([de_dalpha, de_dbeta], axis=-1)
@@ -234,8 +242,8 @@ class OPTKF:
     # function that looks at all data series
     def derivatives_all(self, alpha, beta, auxs):
         gradient, hessian = 0., 0.
-        for aux in auxs:
-            gradient_i, hessian_i = self.derivatives(alpha, beta, aux)
+        for data_ind in range(self.N_data):
+            gradient_i, hessian_i = self.derivatives(alpha, beta, auxs[data_ind], data_ind)
             gradient = gradient + gradient_i
             hessian = hessian + hessian_i
         return gradient, hessian
@@ -244,8 +252,8 @@ class OPTKF:
         # everytime one computes the cost, one also computes the simulation
         t0 = time()
         auxs, value = [], 0.
-        for data in self.datas:
-            aux_i = self.kalman_simulate(alpha, beta, data)
+        for data_ind in range(self.N_data):
+            aux_i = self.kalman_simulate(alpha, beta, data_ind)
             value_i = cost_eval(aux_i["M"], aux_i["e"], aux_i["logdetS"], alpha, beta, self.formulation, L2pen=self.L2pen)
             auxs.append(aux_i)
             value += value_i
@@ -353,6 +361,39 @@ class OPTKF:
         return alpha, beta, stats
 
 # utils
+
+def gradient_dyna_fn(model, us, lti=False, no_u=False):
+    xzero = np.zeros(model.nx)
+    alpha = ca.SX.sym("alpha temp", model.nalpha)
+    A_syms, b_syms = [], []
+    dA_syms, db_syms = [], []
+    dF = model.Fdiscr.jacobian()
+    N = len(us)
+    for k in range(N):
+        A = select_jac( dF(xzero, us[k], alpha, 0), model.nx)
+        dA = ca.jacobian(A, alpha)
+        A_syms.append(A)
+        dA_syms.append(dA)
+        if lti:
+            break # no need to add more than the first one if lti
+    for k in range(N):
+        b = model.Fdiscr(xzero, us[k], alpha)
+        db = ca.jacobian(b, alpha)
+        b_syms.append(b)
+        db_syms.append(db)
+        if no_u:
+            break
+    C = model.G.jacobian()(xzero, 0).full()
+    A_fns = [
+        ca.Function("Afn{}".format(k), [alpha], [A]) for k, A in enumerate(A_syms)]
+    b_fns = [
+        ca.Function("bfn{}".format(k), [alpha], [b]) for k, b in enumerate(b_syms)]
+    dA_fns = [
+        ca.Function("dAfn{}".format(k), [alpha], [dA]) for k, dA in enumerate(dA_syms)]
+    db_fns = [
+        ca.Function("dbfn{}".format(k), [alpha], [db]) for k, db in enumerate(db_syms)]
+    return A_fns, b_fns, C, dA_fns, db_fns
+
 def delete_unecessary(aux):
     del aux["x"]
     del aux["S"]

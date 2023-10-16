@@ -166,55 +166,71 @@ class ModelParser:
         return dQ_fn, dR_fn
 
 class ProblemParser:
-    def __init__(self, model, ys, us, x0, P0, L2pen=0., lti=False, no_u=False):
+    def __init__(self, model, list_ys, list_us, x0, P0, L2pen=0., lti=False, no_u=False):
         self.model = model
-        self.x0 = x0
-        self.P0 = P0
-        self.ys_tot = ys 
-        self.us_tot = us
+        if type(list_ys) is not list:
+            list_ys = [list_ys]
+            list_us = [list_us]
+        self.ys_tot = list_ys 
+        self.us_tot = list_us
+        n_data = len(list_ys)
+        if type(x0) is not list:
+            self.x0 = [x0] * n_data
+            self.P0 = [P0] * n_data
+        else:
+            self.x0 = x0
+            self.P0 = P0
         self.L2pen = L2pen
         self.lti = lti
         self.no_u = no_u
-
-        self.N_tot = self.ys_tot.shape[0] - 1 
         self.nx = self.model.nx
         self.ny = self.model.ny
         self.nu = self.model.nu
         self.nalpha = self.model.nalpha
         self.nbeta = self.model.nbeta
-
-        self.cut(self.N_tot)
+        self.cut()
     
-    def cut(self, N):
-        self.N = N
-        self.ys = self.ys_tot[:N+1]
-        self.us = self.us_tot[:N]
+    def cut(self, N=None):
+        self.list_N = []
+        self.us, self.ys = [], []
+        Ny = N
+        if Ny is not None:
+            Ny = Ny + 1
+        for (us_long, ys_long) in zip(self.us_tot, self.ys_tot):
+            us = us_long[:N]
+            ys = ys_long[:Ny]
+            self.us.append(us)
+            self.ys.append(ys)
+            self.list_N.append(len(us))
 
-    def kalman(self, alpha, beta, save_pred=False, save_Pest=False):
-        x_pred = self.x0.copy()
-        P_pred = self.P0.copy()
-        xs_est, ys_est = np.empty((self.N+1, self.nx)), np.empty((self.N+1, self.ny))
-        innovs = np.empty((self.N+1, self.ny))
+    def kalman(self, alpha, beta, data_ind=0, save_pred=False, save_Pest=False):
+        x_pred = self.x0[data_ind].copy()
+        P_pred = self.P0[data_ind].copy()
+        N = self.list_N[data_ind]
+        us = self.us[data_ind]
+        ys = self.ys[data_ind]
+        xs_est, ys_est = np.empty((N+1, self.nx)), np.empty((N+1, self.ny))
+        innovs = np.empty((N+1, self.ny))
         if save_pred:
             xs_pred, Ps_pred, Ks = (
-                np.empty((self.N + 1, self.nx)),
-                np.empty((self.N + 1, self.nx, self.nx)),
-                np.empty((self.N, self.nx, self.ny))
+                np.empty((N + 1, self.nx)),
+                np.empty((N + 1, self.nx, self.nx)),
+                np.empty((N, self.nx, self.ny))
             )
             Ps_pred[0, :, :] = P_pred[:, :]
             xs_pred[0, :] = x_pred
         if save_Pest:
-            Ps_est = np.empty((self.N + 1, self.nx, self.nx))
+            Ps_est = np.empty((N + 1, self.nx, self.nx))
             Ps_est[0, :, :] = P_pred[:, :]
         Q, R = self.model.get_QR(beta)
         Q = Q.full()
         R = R.full()
         dF = self.model.Fdiscr.jacobian()
-        for k in range(self.N+1):
+        for k in range(N+1):
             C = self.model.G.jacobian()(x_pred, 0).full()
             M = LA.inv(C @ P_pred @ C.T + R)
             K = P_pred @ C.T @ M
-            innovs[k, :] = self.ys[k] - self.model.G(x_pred).full().squeeze()
+            innovs[k, :] = ys[k] - self.model.G(x_pred).full().squeeze()
             x_est = x_pred + K @ innovs[k, :]
             P_est = P_pred - K @ C @ P_pred
             P_est = symmetrize(P_est)
@@ -223,9 +239,9 @@ class ProblemParser:
             if save_Pest:
                 Ps_est[k, :, :] = P_est
 
-            if k < self.N:
-                x_pred = self.model.Fdiscr(x_est, self.us[k], alpha).full().squeeze()
-                A = select_jac( dF(x_est, self.us[k], alpha, 0), self.model.nx).full()
+            if k < N:
+                x_pred = self.model.Fdiscr(x_est, us[k], alpha).full().squeeze()
+                A = select_jac( dF(x_est, us[k], alpha, 0), self.model.nx).full()
                 P_pred = A @ P_est @ A.T + Q
                 # print(k, (M @ innov).T @ innov - np.log(LA.det(M)))  # printing
                 if save_pred:
@@ -239,24 +255,13 @@ class ProblemParser:
             return xs_est, ys_est, Ps_est
         else:
             return xs_est, ys_est
+        
+    def predictions(self, alpha, beta, npred, data_ind=0, Npred=None, Spred=False):
+        xs_est, ys_est, Ps_est = self.kalman(alpha, beta, data_ind=data_ind, save_Pest=True)
 
-    def scale(self, alpha, beta):
-        _, _, xs, Ps, _, innovs = self.kalman(alpha, beta, save_pred=True)
-        error = 0.
-        Q, R = self.model.get_QR(beta)
-        for i in range(self.N+1):
-            C = self.model.G.jacobian()(xs[i], 0).full()
-            M = np.linalg.inv(C @ Ps[i] @ C.T + R)
-            error = error + (M @ innovs[i]) @ innovs[i]
-        scale = error / ((self.N+1 ) * self.ny )
-        return scale
-    
-    def predictions(self, alpha, beta, npred, Npred=None, Spred=False):
-        xs_est, ys_est, Ps_est = self.kalman(alpha, beta, save_Pest=True)
-
-        t_pred, y_pred = self.model.predictions(self.us, xs_est, alpha, npred, Npred=Npred)
+        t_pred, y_pred = self.model.predictions(self.us[data_ind], xs_est, alpha, npred, Npred=Npred)
         if Spred:
-            S_pred = self.model.predictions_S(self.us, Ps_est, alpha, beta, npred, Npred=Npred)
+            S_pred = self.model.predictions_S(self.us[data_ind], Ps_est, alpha, beta, npred, Npred=Npred)
             return t_pred, y_pred, ys_est, S_pred
         else:
             return t_pred, y_pred, ys_est
@@ -274,11 +279,12 @@ class ProblemParser:
         # print("error prediction = {:.2e}".format(error / len(y_preds)))
         return error / len(y_preds)
 
-    def value(self, alpha, beta, formulation="MLE"):
-        _, _, xs, Ps, _, innovs = self.kalman(alpha, beta, save_pred=True)
+    def value(self, alpha, beta, data_ind=0, formulation="MLE"):
+        _, _, xs, Ps, _, innovs = self.kalman(alpha, beta, data_ind=data_ind, save_pred=True)
         val = 0.
+        N = self.list_N[data_ind]
         Q, R = self.model.get_QR(beta)
-        for i in range(self.N+1):
+        for i in range(N+1):
             C = self.model.G.jacobian()(xs[i], 0).full()
             S = C @ Ps[i] @ C.T + R
             if formulation == "MLE":
@@ -326,37 +332,6 @@ class ProblemParser:
         # dicti["eTrain"] = self.error_prediction(alpha, beta, npred, Npred=Npred)
         dicti["eTest"] = problemTest.error_prediction(alpha, beta, npred, Npred=Npred)
         return dicti
-
-    def gradient_dyna_fn(self):
-        xzero = np.zeros(self.model.nx)
-        alpha = ca.SX.sym("alpha temp", self.model.nalpha)
-        A_syms, b_syms = [], []
-        dA_syms, db_syms = [], []
-        dF = self.model.Fdiscr.jacobian()
-        for k in range(self.N):
-            A = select_jac( dF(xzero, self.us[k], alpha, 0), self.model.nx)
-            dA = ca.jacobian(A, alpha)
-            A_syms.append(A)
-            dA_syms.append(dA)
-            if self.lti:
-                break # no need to add more than the first one if lti
-        for k in range(self.N):
-            b = self.model.Fdiscr(xzero, self.us[k], alpha)
-            db = ca.jacobian(b, alpha)
-            b_syms.append(b)
-            db_syms.append(db)
-            if self.no_u:
-                break
-        C = self.model.G.jacobian()(xzero, 0).full()
-        A_fns = [
-            ca.Function("Afn{}".format(k), [alpha], [A]) for k, A in enumerate(A_syms)]
-        b_fns = [
-            ca.Function("bfn{}".format(k), [alpha], [b]) for k, b in enumerate(b_syms)]
-        dA_fns = [
-            ca.Function("dAfn{}".format(k), [alpha], [dA]) for k, dA in enumerate(dA_syms)]
-        db_fns = [
-            ca.Function("dbfn{}".format(k), [alpha], [db]) for k, db in enumerate(db_syms)]
-        return A_fns, b_fns, C, dA_fns, db_fns
 
 def clean_opts_for_ipopt(opts):
     keys = [
