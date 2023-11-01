@@ -102,14 +102,17 @@ Ntest = 100
 Ntrain = 1000
 umax = 50
 
-us_train = model_true.generate_u(rng, Ntrain, umax=umax, step = 10)
-ys_train, _ = model_true.simulation(x0, us_train, alpha_true,  beta_true, rng)
+us_train1 = model_true.generate_u(rng, Ntrain, umax=umax, step = 10)
+us_train2 = model_true.generate_u(rng, Ntrain, umax=umax, step = 10)
+ys_train1, _ = model_true.simulation(x0, us_train1, alpha_true,  beta_true, rng)
+ys_train2, _ = model_true.simulation(x0, us_train2, alpha_true,  beta_true, rng)
 
 us_test = model_true.generate_u(rng, Ntest, umax=umax, step = 10)
 ys_test, _ = model_true.simulation(x0, us_test, alpha_true, beta_true, rng)
 
 # %%
-fig = plot_data(us_train, ys_train)
+fig1 = plot_data(us_train1, ys_train1)
+fig1 = plot_data(us_train2, ys_train2)
 
 # %% [markdown]
 # # Estimation
@@ -122,7 +125,7 @@ assert model.feasible(alpha_true, beta_true), "Constraints should be satisfied f
 
 # %%
 # the flag lti allow to speed things up for LTI systems 
-problemTrain = ProblemParser(model, ys_train, us_train, x0, P0, lti=True)
+problemTrain = ProblemParser(model, [ys_train1, ys_train2], [us_train1, us_train2], x0, P0, lti=True)
 problemTest = ProblemParser(model, ys_test, us_test, x0, P0)
 
 # %%
@@ -136,7 +139,7 @@ alpha0 = rng.random(model.nalpha)* alpha_max
 # %%
 formulation = "MLE" # can be "MLE", "PredErr"
 algorithm = "SQP" # can be "SQP" or "IPOPT"
-opts = {"pen_step":1e-10} # parameters of the SQP method
+opts = {"pen_step":1e-5} # parameters of the SQP method
 
 # %%
 t0 = time()
@@ -145,6 +148,9 @@ alpha_found, beta_found, stats = problemTrain.solve(alpha0, beta0,
                                                     formulation, algorithm, opts=opts, verbose=True, rescale=True)
 rtime = time() - t0
 print("running time : {:.2e}  status : {}".format(rtime, stats["return_status"]))
+
+# %% [markdown]
+#
 
 # %%
 print( alpha_true, alpha_found)
