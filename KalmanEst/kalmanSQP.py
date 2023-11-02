@@ -347,13 +347,14 @@ class OPTKF:
         if self.do_rescale:
             scale, auxs, cost = self.rescale(auxs, cost)
             beta = beta * scale
-        termination = "maxiter"
         for j in range(self.opts["maxiter"]):
             alpha, beta, cost, auxs, termination  = self.stepSQP(alpha, beta, cost, auxs)
             if self.verbose:
                 print(f"Iteration {j+1}, Current cost {cost:2e}")
             if termination is not None:
                 break
+        if termination is None:
+            termination = "maxiter"
         if self.verbose:
             print("termination :", termination)
         self.rtimes["total"] += time() - t0
