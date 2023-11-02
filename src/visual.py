@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt # type:ignore
 
 colors = ["darkcyan", "orange", "pink"]
 colors_pred = ["purple", "firebrick", "olive"]
-colors_u = ["brown", "green"]
+colors_u = ["brown", "green", "yellow"]
 
 def latexify():
     params = {
@@ -95,7 +95,8 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
 def plot_est(us, ys, yest, dt=1.,
     u_other_scale=None, alpha_u=1., title=None,
     pred=None, ys_true=None, Spred=None, char="-", ax=None, legend=True,
-    nstd=2, legend_order=None, ax4legend=None, figsize=(8, 4)
+    nstd=2, legend_order=None, ax4legend=None, figsize=(8, 4),
+    alpha_pred=1.
     ):
     if ax is None:
         fig, ax = plt.subplots(1, figsize=figsize)
@@ -142,11 +143,16 @@ def plot_est(us, ys, yest, dt=1.,
                 spred_stack.append(np.ones(ny)*np.nan)
             spred_stack = np.array(spred_stack).reshape(-1, ny)
                 
-
     for i in range(ny):
+        if ys is not None:   
+            ax.plot(ts * dt, ys[:, i], char, label=r"$y^{}_k$".format(i+1), color=colors[i])
+        if yest is not None: 
+            ax.plot(ts * dt, yest[:, i], char, label=r"$\hat{y}^{"+str(i+1)+r"}$", color=colors[i])
+        if ys_true is not None:
+            ax.plot(ts * dt, ys_true[:, j], char, label="y unnoised {}".format(j))
         if pred is not None:
             ax.plot(t0s * dt, y0s[:, i], 'o', color=colors_pred[i], ) #label=r"$t$")
-            ax.plot(tpred_stack * dt, ypred_stack[:, i],
+            ax.plot(tpred_stack * dt, ypred_stack[:, i], alpha=alpha_pred,
                 label=r"$\hat{y}^{"+str(i+1)+r"}_{k\mid t}$", color=colors_pred[i],
                 linewidth=linewidth_pred)
             if Spred is not None:
@@ -156,12 +162,7 @@ def plot_est(us, ys, yest, dt=1.,
                     tpred_stack * dt, yhat-yerr, yhat+yerr, alpha=alpha_tube, color=colors_pred[i],
                     label=r"$\hat{y}^{" +str(i+1)+ r"}_{k\mid t} \pm" + str(nstd) + r"\sigma$")
                 # ax.errorbar(tpred_stack, yhat, yerr=yerr, alpha=0.4, color=colors[i], label="$2$ std")
-        if ys is not None:   
-            ax.plot(ts * dt, ys[:, i], char, label=r"$y^{}_k$".format(i+1), color=colors[i])
-        if yest is not None: 
-            ax.plot(ts * dt, yest[:, i], char, label=r"$\hat{y}^{"+str(i+1)+r"}$", color=colors[i])
-        if ys_true is not None:
-            ax.plot(ts * dt, ys_true[:, j], char, label="y unnoised {}".format(j))
+    
     ax.set_xlabel('Time (sec)')
     ax.grid()
     h, l = ax.get_legend_handles_labels()
