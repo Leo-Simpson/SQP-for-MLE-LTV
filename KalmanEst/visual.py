@@ -46,7 +46,7 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
     
     N, ny = ys.shape
     N, nu = us.shape
-    ts = np.arange(N+1) * dt
+    ts = np.arange(N) * dt
     if us is not None:
         nu = us.shape[1]
         if ulabels is None:
@@ -63,9 +63,9 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
             ax_.plot(ts[:N], us[:, j], char, label=ulabels[j], alpha=alpha_u, color=colors_u[j])
     for i in range(ny):
         alphay = 1 #  / (i+1)
-        ax.plot(ts, ys[:, i], char, label=r"$y_{"+str(i+1)+r", k}$", color=colors[i], alpha=alphay)
+        ax.plot(ts, ys[:N, i], char, label=r"$y_{"+str(i+1)+r", k}$", color=colors[i], alpha=alphay)
         if ys_true is not None:
-            ax.plot(ts, ys_true[:, i], char, label="y unnoised {}".format(i+1))
+            ax.plot(ts, ys_true[:N, i], char, label="y unnoised {}".format(i+1))
     
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -109,8 +109,8 @@ def plot_est(us, ys, yest, dt=1.,
     alpha_tube = 0.5
     linewidth_pred = 1. # used to be 3
     N, ny = ys.shape
-    N = N - 1
-    ts = np.arange(N+1)
+    N, nu = us.shape
+    ts = np.arange(N)*dt
     if us is not None:
         nu = us.shape[1]
         if u_other_scale is not None:
@@ -119,7 +119,7 @@ def plot_est(us, ys, yest, dt=1.,
             ax_ = ax
             if u_other_scale is not None and j in u_other_scale:
                 ax_ = axu
-            ax_.plot(ts[:N], us[:, j], char, label=r"$u^{}_k$".format(j+1), alpha=alpha_u, color=colors_u[j])
+            ax_.plot(ts, us[:, j], char, label=r"$u^{}_k$".format(j+1), alpha=alpha_u, color=colors_u[j])
     
     if pred is not None:
         tspred, yspred = pred
@@ -145,11 +145,11 @@ def plot_est(us, ys, yest, dt=1.,
                 
     for i in range(ny):
         if ys is not None:   
-            ax.plot(ts * dt, ys[:, i], char, label=r"$y^{}_k$".format(i+1), color=colors[i])
+            ax.plot(ts * dt, ys[:N, i], char, label=r"$y^{}_k$".format(i+1), color=colors[i])
         if yest is not None: 
-            ax.plot(ts * dt, yest[:, i], char, label=r"$\hat{y}^{"+str(i+1)+r"}$", color=colors[i])
+            ax.plot(ts * dt, yest[:N, i], char, label=r"$\hat{y}^{"+str(i+1)+r"}$", color=colors[i])
         if ys_true is not None:
-            ax.plot(ts * dt, ys_true[:, j], char, label="y unnoised {}".format(j))
+            ax.plot(ts * dt, ys_true[:N, j], char, label="y unnoised {}".format(j))
         if pred is not None:
             ax.plot(t0s * dt, y0s[:, i], 'o', color=colors_pred[i], ) #label=r"$t$")
             ax.plot(tpred_stack * dt, ypred_stack[:, i], alpha=alpha_pred,
