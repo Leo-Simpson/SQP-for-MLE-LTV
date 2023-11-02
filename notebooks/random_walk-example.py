@@ -16,8 +16,8 @@ sys.path.append(main_dir)
 import numpy as np
 import matplotlib.pyplot as plt # type: ignore
 import casadi as ca # type: ignore
-from src import ProblemParser, ModelParser # main objects to use the present algorithms
-from src import plot_data, plot_est, plot_res # plotting tools
+from KalmanEst import ProblemParser, ModelParser # main objects to use the present algorithms
+from KalmanEst import plot_data, plot_est, plot_res # plotting tools
 from time import time
 rng = np.random.default_rng(seed=42)
 
