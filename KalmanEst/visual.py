@@ -45,7 +45,7 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
 
     
     N, ny = ys.shape
-    N = N - 1 
+    N, nu = us.shape
     ts = np.arange(N+1) * dt
     if us is not None:
         nu = us.shape[1]
