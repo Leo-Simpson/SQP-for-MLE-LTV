@@ -10,7 +10,7 @@ def symmetrize(x):
 def psd_inverse(m, inds, det=True):
     if m.shape[0] == 1:
         if det:
-            return 1./m, np.log(m)
+            return 1./m, np.log(m[0,0])
         else:
             return 1/m
     # https://stackoverflow.com/questions/40703042/more-efficient-way-to-invert-a-matrix-knowing-it-is-symmetric-and-positive-semi
