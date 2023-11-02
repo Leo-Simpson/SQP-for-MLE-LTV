@@ -163,6 +163,8 @@ class OPTKF:
             As = As * N
             bs = bs * N
         Q, R = self.model.get_QR(beta)
+        Q = Q.full()
+        R = R.full()
         xs[0] = self.datas[data_ind]["x0"]
         Ps[0] = self.datas[data_ind]["P0"]
         for k in range(N):
