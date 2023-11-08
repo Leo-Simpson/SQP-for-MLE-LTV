@@ -281,8 +281,8 @@ class OPTKF:
         else: 
             A, b = eqconstr
         problem_QP = Problem_QP(s*Q, s*p, G, h, A, b)
-        sol = solve_qp(problem_QP, initvals=x_start, solver=solver, verbose=True)
-        x = sol.x 
+        sol = solve_qp(problem_QP, initvals=x_start, solver=solver, verbose=False)
+        x = sol.x
         lam = sol.z
         der = -(p + Q @ x_start) @ (x - x_start)
         self.rtimes["QP"] += time() - t0
