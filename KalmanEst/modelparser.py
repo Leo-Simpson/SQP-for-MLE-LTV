@@ -166,7 +166,7 @@ class ModelParser:
         return dQ_fn, dR_fn
 
 class ProblemParser:
-    def __init__(self, model, list_ys, list_us, x0, P0, L2pen=0., lti=False, no_u=False):
+    def __init__(self, model, list_ys, list_us, x0, P0, L2pen=0., lti=False, no_u=False, idx_start=0):
         self.model = model
         if type(list_ys) is not list:
             list_ys = [list_ys]
@@ -183,11 +183,13 @@ class ProblemParser:
         self.L2pen = L2pen
         self.lti = lti
         self.no_u = no_u
+        self.idx_start = idx_start # index of the first data point to consider in the cost function
         self.nx = self.model.nx
         self.ny = self.model.ny
         self.nu = self.model.nu
         self.nalpha = self.model.nalpha
         self.nbeta = self.model.nbeta
+        
         self.cut()
     
     def cut(self, N=None):

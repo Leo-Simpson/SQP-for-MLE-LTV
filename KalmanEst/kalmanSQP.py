@@ -39,6 +39,7 @@ class OPTKF:
     def __init__(self, problem, formulation, eqconstr=True, verbose=True, rescale=True, opts={}):
         self.model = problem.model
         self.L2pen = problem.L2pen
+        self.idx_start = problem.idx_start
         self.formulation = formulation
         self.verbose = verbose
         self.do_rescale = rescale
@@ -173,8 +174,8 @@ class OPTKF:
                     As[k], bs[k], C, Q, R,
                     Ps[k], xs[k], ys[k],
                     self.inds_tri_M)
-
-            logdetS = logdetS + logdetSk
+            if k >= self.idx_start:
+                logdetS = logdetS + logdetSk
         aux = {
                "P":Ps, "L":Ls, "M":Ms, "S":Ss, "logdetS":logdetS,
                "A" : As, "b": bs,
@@ -217,8 +218,9 @@ class OPTKF:
                 Mde = M @ de_dab
                 gradient_k = (dMe + 2 * Mde).T @ e - trSdM_k
                 hessian_k = 2 * np.linalg.multi_dot([ (dMe+Mde).T, S, dMe+Mde  ])
-            gradient = gradient + gradient_k
-            hessian = hessian + hessian_k
+            if k >= self.idx_start:
+                gradient = gradient + gradient_k
+                hessian = hessian + hessian_k
         delete_unecessary(aux)
         self.rtimes["derivatives"] += time() - t0
         self.ncall["derivatives"] += 1
@@ -228,13 +230,15 @@ class OPTKF:
         s = 0.
         dim = 0.
         for aux in auxs:
-            dim = dim + len(aux["e"]) * self.model.ny
-            s = s + np.sum(aux["e"][:, np.newaxis] @ aux["M"] @ aux["e"][..., np.newaxis]) 
+            es = aux["e"][self.idx_start:]
+            Ms = aux["M"][self.idx_start:]
+            dim = dim + len(es) * self.model.ny
+            s = s + np.sum(es[:, np.newaxis] @ Ms @ es[..., np.newaxis]) 
         lamb = s / dim
         if self.formulation == "MLE":
             cost = dim *(1 + np.log(lamb)) + (cost - s) # (cost - s) is the logdetS, s / lamb is dim
         for aux in auxs:
-            dimension = len(aux["e"]) * self.model.ny
+            dimension = len(aux["e"][self.idx_start:]) * self.model.ny
             aux["M"] = aux["M"] / lamb
             aux["P"] = aux["P"] * lamb
             aux["S"] = aux["S"] * lamb
@@ -256,7 +260,7 @@ class OPTKF:
         auxs, value = [], 0.
         for data_ind in range(self.N_data):
             aux_i = self.kalman_simulate(alpha, beta, data_ind)
-            value_i = cost_eval(aux_i["M"], aux_i["e"], aux_i["logdetS"], alpha, beta, self.formulation, L2pen=self.L2pen)
+            value_i = cost_eval(aux_i["M"][self.idx_start:], aux_i["e"][self.idx_start:], aux_i["logdetS"], alpha, beta, self.formulation, L2pen=self.L2pen)
             auxs.append(aux_i)
             value += value_i
         self.rtimes["cost_eval"] += time() - t0
