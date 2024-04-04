@@ -84,9 +84,9 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
     if legend:
         if ax4legend is None:
             ax4legend = ax
-            box = (1.1, 0.5)
+            box = (0, 0.8)
         else:
-            box = (1.1, 0.5)
+            box = (0, 0.5)
         ax4legend.legend(h, l, loc='center left', bbox_to_anchor=box)
 
     if new_fig:
@@ -180,7 +180,7 @@ def plot_est(us, ys, yest, dt=1.,
     if legend:
         if ax4legend is None:
             ax4legend = ax
-            box = (1.1, 0.5)
+            box = (1., 0.5)
         else:
             box = (1, 0.5)
         ax4legend.legend(h_, l_, loc='center left', bbox_to_anchor=box)

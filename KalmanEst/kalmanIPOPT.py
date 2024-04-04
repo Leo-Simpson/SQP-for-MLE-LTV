@@ -94,11 +94,11 @@ class NLP:
         self.keep.append(obj)
 
 def nlp_kalman(problem, alpha0, beta0, formulation):
-    us = problem.us
-    ys = problem.ys
+    us = problem.us[0]
+    ys = problem.ys[0] # TODO : that takes only the first dataset, so I have to make it for several datasets
     model = problem.model
-    x0 = problem.x0
-    P0 = problem.P0
+    x0 = problem.x0[0]
+    P0 = problem.P0[0]
     typ = ca.SX
     N = ys.shape[0] - 1
     nP = int(model.nx * (model.nx + 1) / 2)

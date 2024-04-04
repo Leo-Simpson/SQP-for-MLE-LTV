@@ -55,7 +55,7 @@ class OPTKF:
         self.linearizing_fns = []
         for (x0, P0, ys, us) in zip(problem.x0, problem.P0, problem.ys, problem.us):
             data = {"x0":x0, "P0":P0, "ys":ys}
-            A_fns, b_fns, C, dA_fns, db_fns = gradient_dyna_fn(self.model, us, lti=problem.lti, no_u=problem.no_u) # prepare linearizing functions
+            A_fns, b_fns, C, dA_fns, db_fns = gradient_dyna_fn(self.model, us, lti=problem.lti, no_u=problem.no_u) # prepare linearizing functions            
             lin_fns = {"A":A_fns, "b":b_fns, "dA":dA_fns, "db":db_fns, "C":C}
             self.linearizing_fns.append(lin_fns)
             self.datas.append(data)
@@ -383,6 +383,9 @@ def gradient_dyna_fn(model, us, lti=False, no_u=False):
         dA_syms.append(dA)
         if lti:
             break # no need to add more than the first one if lti
+    if not lti:
+        dA_syms.append(dA_syms[-1]) # since the last one might does not have inputs.
+        A_syms.append(A_syms[-1])
     for k in range(N):
         b = model.Fdiscr(xzero, us[k], alpha)
         db = ca.jacobian(b, alpha)
@@ -390,6 +393,10 @@ def gradient_dyna_fn(model, us, lti=False, no_u=False):
         db_syms.append(db)
         if no_u:
             break
+    if not no_u:
+        b_syms.append(b_syms[-1])
+        db_syms.append(db_syms[-1]) # since the last one might does not have inputs.
+    
     C = model.G.jacobian()(xzero, 0).full()
     A_fns = [
         ca.Function("Afn{}".format(k), [alpha], [A]) for k, A in enumerate(A_syms)]
