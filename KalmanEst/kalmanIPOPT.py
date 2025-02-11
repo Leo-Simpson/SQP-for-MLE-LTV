@@ -94,8 +94,8 @@ class NLP:
         self.keep.append(obj)
 
 def nlp_kalman(problem, alpha0, beta0, formulation):
-    us = problem.us
-    ys = problem.ys
+    us = problem.us[0] # cannot handle multiple datasets for now
+    ys = problem.ys[0] # cannot handle multiple datasets for now
     model = problem.model
     x0 = problem.x0
     P0 = problem.P0
