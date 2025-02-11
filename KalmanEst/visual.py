@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt # type:ignore
 
 
 colors = ["darkcyan", "orange", "pink"]
+colors2 = ["darkcyan", "orange", "pink"]
 colors_pred = ["purple", "firebrick", "olive"]
 colors_u = ["brown", "green", "yellow"]
 
@@ -83,9 +84,9 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
     if legend:
         if ax4legend is None:
             ax4legend = ax
-            box = (1.1, 0.5)
+            box = (0, 0.8)
         else:
-            box = (1.1, 0.5)
+            box = (0, 0.5)
         ax4legend.legend(h, l, loc='center left', bbox_to_anchor=box)
 
     if new_fig:
@@ -147,7 +148,7 @@ def plot_est(us, ys, yest, dt=1.,
         if ys is not None:   
             ax.plot(ts * dt, ys[:N, i], char, label=r"$y^{}_k$".format(i+1), color=colors[i])
         if yest is not None: 
-            ax.plot(ts * dt, yest[:N, i], char, label=r"$\hat{y}^{"+str(i+1)+r"}$", color=colors[i])
+            ax.plot(ts * dt, yest[:N, i], "-.", label=r"$\hat{y}^{"+str(i+1)+r"}$", color=colors2[i])
         if ys_true is not None:
             ax.plot(ts * dt, ys_true[:N, j], char, label="y unnoised {}".format(j))
         if pred is not None:
@@ -179,7 +180,7 @@ def plot_est(us, ys, yest, dt=1.,
     if legend:
         if ax4legend is None:
             ax4legend = ax
-            box = (1.1, 0.5)
+            box = (1., 0.5)
         else:
             box = (1, 0.5)
         ax4legend.legend(h_, l_, loc='center left', bbox_to_anchor=box)
