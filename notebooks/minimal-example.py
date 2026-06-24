@@ -7,18 +7,17 @@
 # %matplotlib notebook
 
 # %%
-import sys, os
-from os.path import join, dirname
-main_dir = dirname(os.getcwd())
-sys.path.append(main_dir)
-
-# %%
+import sys
+from os.path import dirname, abspath
 import numpy as np
-import matplotlib.pyplot as plt # type: ignore
-import casadi as ca # type: ignore
-from KalmanEst import ProblemParser, ModelParser # main objects to use the present algorithms
-from KalmanEst import plot_data, plot_est, plot_res # plotting tools
+import casadi as ca
 from time import time
+import matplotlib.pyplot as plt
+
+MAIN_DIR = dirname(dirname(abspath(__file__)))
+sys.path.insert(0, str(MAIN_DIR))
+import KalmanEst as KE
+
 rng = np.random.default_rng(seed=42)
 
 # %% [markdown]
@@ -50,8 +49,8 @@ def dynamic(x, u, alpha, beta):
     ny = 2
     
     # noise model
-    Q =  beta[0] *  ca.DM.eye(nx)
-    R =  beta[1] *  ca.DM.eye(ny)
+    Q =  beta[0] *  KE.dm_eye(nx)
+    R =  beta[1] *  KE.dm_eye(ny)
     
     # inequality constraints on the form h > 0
     h = ca.vertcat(alpha, alpha_max - alpha, beta - beta_min)
@@ -60,10 +59,10 @@ def dynamic(x, u, alpha, beta):
 
 # %%
 # Define the model with Casadi symbolics
-x_symbol = ca.SX.sym("x", 3)
-u_symbol = ca.SX.sym("u", 1)
-alpha_symbol = ca.SX.sym("alpha", 2)
-beta_symbol = ca.SX.sym("beta", 2)
+x_symbol = KE.sym("x", 3)
+u_symbol = KE.sym("u", 1)
+alpha_symbol = KE.sym("alpha", 2)
+beta_symbol = KE.sym("beta", 2)
 xplus_symbol, y_symbol, Q_symbol, R_symbol, h_symbol = dynamic(x_symbol, u_symbol, alpha_symbol, beta_symbol)
 
 # %%
@@ -82,14 +81,13 @@ h_fn = ca.Function("h", [alpha_symbol, beta_symbol], [h_symbol])
 
 # %%
 # make model Parser
-model_true = ModelParser(xplus_fn, y_fn, Q_fn, R_fn)
+model_true = KE.ModelParser(xplus_fn, y_fn, Q_fn, R_fn)
 
 alpha_true = rng.random(model_true.nalpha)* alpha_max # choose a "true parameter randomly"
 beta_true = np.ones(model_true.nbeta)
 beta_true[0] = 1e-1
 beta_true[1] = 1e-2
-alpha_true
-
+print(f" true alpha = {alpha_true}")
 # %%
 x0 = np.zeros(model_true.nx)
 P0 = np.eye(model_true.nx) * 0.
@@ -111,22 +109,23 @@ us_test = model_true.generate_u(rng, Ntest, umax=umax, step = 10)
 ys_test, _ = model_true.simulation(x0, us_test, alpha_true, beta_true, rng)
 
 # %%
-fig1 = plot_data(us_train1, ys_train1)
-fig1 = plot_data(us_train2, ys_train2)
+fig1 = KE.plot_data(us_train1, ys_train1)
+fig2 = KE.plot_data(us_train2, ys_train2)
+plt.show()
 
 # %% [markdown]
 # # Estimation
 
 # %%
 # Here we use the model that is assumed
-model = ModelParser(xplus_fn, y_fn, Q_fn, R_fn)
+model = KE.ModelParser(xplus_fn, y_fn, Q_fn, R_fn)
 model.Ineq = h_fn
 assert model.feasible(alpha_true, beta_true), "Constraints should be satisfied for the true parameters"
 
 # %%
 # the flag lti allow to speed things up for LTI systems 
-problemTrain = ProblemParser(model, [ys_train1, ys_train2], [us_train1, us_train2], x0, P0, lti=True)
-problemTest = ProblemParser(model, ys_test, us_test, x0, P0)
+problemTrain = KE.ProblemParser(model, [ys_train1, ys_train2], [us_train1, us_train2], x0, P0, lti=True)
+problemTest = KE.ProblemParser(model, ys_test, us_test, x0, P0)
 
 # %%
 # define the initial point for optimization
@@ -173,12 +172,12 @@ stats["termination"]
 # ### Validation on out-of-sample data 
 
 # %%
-xs_est, ys_est = problemTest.kalman(alpha_found, beta_found)
+dict_kalman = problemTest.kalman(alpha_found, beta_found)
+xs_est, ys_est = dict_kalman["xs_est"], dict_kalman["ys_est"]
 
 npred = 3
 t_pred, y_pred =  model.predictions(us_test, xs_est, alpha_found, npred)
 
 # %%
-fig =plot_est(us_test, ys_test, ys_est, pred=(t_pred, y_pred))
-
-# %%
+fig = KE.plot_est(us_test, ys_test, ys_est, pred=(t_pred, y_pred))
+plt.show()

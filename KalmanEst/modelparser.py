@@ -1,11 +1,11 @@
 import casadi as ca #type: ignore
-import numpy as np # type: ignore
-import numpy.linalg as LA # type: ignore
+import numpy as np
+import numpy.linalg as LA
 import contextlib
 from math import ceil
-from numpy.linalg import norm # type: ignore
-from scipy.linalg import sqrtm # type: ignore
-from .misc import symmetrize, select_jac
+from numpy.linalg import norm
+from scipy.linalg import sqrtm
+import KalmanEst.misc as misc
 
 class ModelParser:
     def __init__(self, Fdiscr, G, Q_fn, R_fn):
@@ -13,6 +13,7 @@ class ModelParser:
         self.G =  G
         self.Q_fn = Q_fn
         self.R_fn = R_fn
+        self.Ineq: ca.Function | None = None
         self.get_dim()
 
     def get_dim(self):
@@ -32,12 +33,16 @@ class ModelParser:
     
     def propP(self, P, u, alpha, Q):
         A_ = self.Fdiscr.jacobian()(np.zeros(self.nx), u, alpha, 0)
-        A = select_jac(A_, self.nx).full()
+        A = misc.select_jac(A_, self.nx).full()
         P_next = A @ P @ A.T + Q
-        return symmetrize(P_next)
+        return misc.symmetrize(P_next)
 
     def feasible(self, alpha, beta):
-        return self.Ineq(alpha, beta).full().min() > 0.
+        if self.Ineq is None:
+            return True
+        else:
+            return self.Ineq(alpha, beta).full().min() > 0.
+
 
     def trajectory(self, x0, us, alpha):
         x = x0.copy()
@@ -134,14 +139,14 @@ class ModelParser:
         return ys, ys_true
   
     def augment_model(self):
-        x = ca.SX.sym("x", self.nx)
-        u = ca.SX.sym("u", self.nu)
-        alpha = ca.SX.sym("a", self.nalpha)
+        x = misc.sym("x", self.nx)
+        u = misc.sym("u", self.nu)
+        alpha = misc.sym("a", self.nalpha)
 
         xplus = self.Fdiscr(x, u, alpha)
         y = self.G(x)
 
-        d = ca.SX.sym("d", y.shape[0])
+        d = misc.sym("d", y.shape[0])
         dplus = d
         yaug = y + d
         self.Fdiscr = ca.Function(
@@ -159,7 +164,7 @@ class ModelParser:
         raise ValueError("Failed to draw feasible parameter")
 
     def gradient_covariances_fn(self):
-        beta = ca.SX.sym("betatemp", self.nbeta)
+        beta = misc.sym("betatemp", self.nbeta)
         Q, R = self.get_QR(beta)
         dQ_fn = ca.Function("dQ", [beta], [ca.jacobian(Q, beta)])
         dR_fn = ca.Function("dR", [beta], [ca.jacobian(R, beta)])
@@ -235,7 +240,7 @@ class ProblemParser:
             innovs[k, :] = ys[k] - self.model.G(x_pred).full().squeeze()
             x_est = x_pred + K @ innovs[k, :]
             P_est = P_pred - K @ C @ P_pred
-            P_est = symmetrize(P_est)
+            P_est = misc.symmetrize(P_est)
             xs_est[k, :] = x_est
             ys_est[k, :] = self.model.G(x_est).full().squeeze()
             if save_Pest:
@@ -243,7 +248,7 @@ class ProblemParser:
 
             if k < N:
                 x_pred = self.model.Fdiscr(x_est, us[k], alpha).full().squeeze()
-                A = select_jac( dF(x_est, us[k], alpha, 0), self.model.nx).full()
+                A = misc.select_jac( dF(x_est, us[k], alpha, 0), self.model.nx).full()
                 P_pred = A @ P_est @ A.T + Q
                 # print(k, (M @ innov).T @ innov - np.log(LA.det(M)))  # printing
                 if save_pred:
@@ -251,15 +256,22 @@ class ProblemParser:
                     xs_pred[k + 1, :] = x_pred
                     Ks[k, :, :] = K[:, :]
 
+        to_return: dict[str, np.ndarray] = {
+            "xs_est": xs_est,
+            "ys_est": ys_est
+        }
         if save_pred:
-            return xs_est, ys_est, xs_pred, Ps_pred, Ks, innovs
+            to_return["xs_pred"] = xs_pred
+            to_return["Ps_pred"] = Ps_pred
+            to_return["Ks"] = Ks
+            to_return["innovs"] = innovs
         elif save_Pest:
-            return xs_est, ys_est, Ps_est
-        else:
-            return xs_est, ys_est
+            to_return["Ps_est"] = Ps_est
+        return to_return
         
     def predictions(self, alpha, beta, npred, data_ind=0, Npred=None, Spred=False):
-        xs_est, ys_est, Ps_est = self.kalman(alpha, beta, data_ind=data_ind, save_Pest=True)
+        dict_kalman = self.kalman(alpha, beta, data_ind=data_ind, save_Pest=True)
+        xs_est, ys_est, Ps_est = dict_kalman["xs_est"], dict_kalman["ys_est"], dict_kalman["Ps_est"]
 
         t_pred, y_pred = self.model.predictions(self.us[data_ind], xs_est, alpha, npred, Npred=Npred)
         if Spred:
@@ -282,7 +294,8 @@ class ProblemParser:
         return error / len(y_preds)
 
     def value(self, alpha, beta, data_ind=0, formulation="MLE"):
-        _, _, xs, Ps, _, innovs = self.kalman(alpha, beta, data_ind=data_ind, save_pred=True)
+        dict_kalman = self.kalman(alpha, beta, data_ind=data_ind, save_pred=True)
+        xs, Ps, innovs  = dict_kalman["xs_pred"], dict_kalman["Ps_pred"], dict_kalman["innovs"]
         val = 0.
         N = self.list_N[data_ind]
         Q, R = self.model.get_QR(beta)

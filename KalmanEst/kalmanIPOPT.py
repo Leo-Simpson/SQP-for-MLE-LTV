@@ -1,8 +1,6 @@
-import casadi as ca  # type: ignore
-import numpy as np  # type: ignore
-import numpy.linalg as LA  # type: ignore
-from .misc import sym2vec, vec2sym, select_jac
-
+import casadi as ca 
+import numpy as np 
+import KalmanEst.misc as misc
 
 class NLP:
     def __init__(self):
@@ -13,18 +11,18 @@ class NLP:
             }
     
         self.solver_dict = {
-            "x0": [],
-            "lbx": [],
-            "ubx": [],
-            "lbg": [],
-            "ubg": [],
+            "x0": np.array([]),
+            "lbx": np.array([]),
+            "ubx": np.array([]),
+            "lbg": np.array([]),
+            "ubg": np.array([]),
         }
 
         self.keep = [] # list for not putting to the trash some objects
 
     def direct_init(self, nlp,  lbg, ubg, X0):
         self.nlp = nlp
-        self.solver_dict = {
+        self.solver_dict: dict[str, np.ndarray] = {
             "x0": X0,
             "lbx": -np.inf * np.ones_like(X0),
             "ubx": np.inf * np.ones_like(X0),
@@ -37,23 +35,26 @@ class NLP:
         if type(var0) is not np.ndarray:
             var0 = var0.full()
         var0_ = var0.reshape(-1)
-        self.solver_dict["x0"].append(var0_)
-        self.solver_dict["lbx"].append(np.ones(len(var0_))*lbx)
-        self.solver_dict["ubx"].append(np.ones(len(var0_)) * ubx)
+
+        self.solver_dict["x0"] = np.append(self.solver_dict["x0"], var0_)
+        self.solver_dict["lbx"] = np.append(self.solver_dict["lbx"], np.ones(len(var0_))*lbx)
+        self.solver_dict["ubx"] = np.append(self.solver_dict["ubx"], np.ones(len(var0_)) * ubx)
 
     def add_eq(self, eq, ubg=0., lbg=0.):
         eq_ = eq.reshape((-1, 1))
         self.nlp["g"].append(eq_)
-        self.solver_dict["lbg"].append(np.ones(eq_.shape[0]) * lbg)
-        self.solver_dict["ubg"].append(np.ones(eq_.shape[0]) * ubg)
+        self.solver_dict["lbg"] = np.append(self.solver_dict["lbg"], np.ones(eq_.shape[0])*lbg)
+        self.solver_dict["ubg"] = np.append(self.solver_dict["ubg"], np.ones(eq_.shape[0]) * ubg)
     
     def verif_init(self, tol=1e-8):
-        g0 = ca.Function("constr", [self.nlp["x"]], [self.nlp["g"]])(self.solver_dict["x0"]).full().squeeze()
+        x_sym = ca.vcat(self.nlp["x"])
+        g_sym = ca.vcat(self.nlp["g"])
+        g0 = ca.Function("constr", [x_sym], [g_sym])(self.solver_dict["x0"]).full().squeeze()
         cond = np.all(g0 <= self.solver_dict["ubg"]+tol) and np.all(g0 >= self.solver_dict["lbg"]-tol)
         if not cond:
             raise ValueError("The initial point does not satisfy the constraints")
 
-    def _solver_options(self, opts) -> dict:
+    def _solver_options(self, opts):
         self.nlpsolver_options = {}
         self.nlpsolver_options["expand"] = False
         self.nlpsolver_options["ipopt.max_iter"] = 500
@@ -69,7 +70,12 @@ class NLP:
 
     def presolve(self, opts={}):
         self._solver_options(opts)
-        self.nlpsol = ca.nlpsol("S", "ipopt", self.nlp, self.nlpsolver_options)
+        nlp_stack = {
+            "x": ca.vcat(self.nlp["x"]),
+            "f": self.nlp["f"],
+            "g": ca.vcat(self.nlp["g"])
+        }
+        self.nlpsol = ca.nlpsol("S", "ipopt", nlp_stack, self.nlpsolver_options)
 
     def solve(self) -> tuple:
         r = self.nlpsol(
@@ -84,12 +90,6 @@ class NLP:
     def add_value(self, value):
         self.nlp["f"] = self.nlp["f"] + value
 
-    def stack(self):
-        self.nlp["x"] = ca.vcat(self.nlp["x"])
-        self.nlp["g"] = ca.vcat(self.nlp["g"])
-        for key, item in self.solver_dict.items():
-            self.solver_dict[key] = np.concatenate(item)
-        
     def remember(self, obj):
         self.keep.append(obj)
 
@@ -99,12 +99,11 @@ def nlp_kalman(problem, alpha0, beta0, formulation):
     model = problem.model
     x0 = problem.x0[0]
     P0 = problem.P0[0]
-    typ = ca.SX
     N = ys.shape[0] - 1
     nP = int(model.nx * (model.nx + 1) / 2)
     nS = int(model.ny * (model.ny + 1) / 2)
-    alpha = typ.sym("alpha", model.nalpha)
-    beta = typ.sym("beta", model.nbeta)
+    alpha = misc.sym("alpha", model.nalpha)
+    beta = misc.sym("beta", model.nbeta)
 
     if model.Ineq is None:
         ineq = np.array([0])
@@ -132,7 +131,7 @@ def nlp_kalman(problem, alpha0, beta0, formulation):
 
     def update(x, P, Q, S, a, u, y, M=None):
         A_ = Afn(x, u, a, 0)
-        A = select_jac(A_, model.nx)
+        A = misc.select_jac(A_, model.nx)
         if M is None:
             M = ca.inv(S)
         K = P @ C.T @ M
@@ -151,13 +150,13 @@ def nlp_kalman(problem, alpha0, beta0, formulation):
     
     for k in range(N+1):
         # Equation for S
-        S_vec = typ.sym("S{}".format(k+1), nS)
-        S_k = vec2sym(S_vec, model.ny, typ=typ)
+        S_vec = misc.sym("S{}".format(k+1), nS)
+        S_k = misc.vec2sym(S_vec, model.ny)
         Sk_new = get_S(x_k, P_k, R)
         Sk0 = get_S(x_k0, P_k0, R0)
 
-        nlp.add_var(S_vec, sym2vec(Sk0))
-        nlp.add_eq( sym2vec( S_k - Sk_new ) )
+        nlp.add_var(S_vec, misc.sym2vec(Sk0))
+        nlp.add_eq( misc.sym2vec( S_k - Sk_new ) )
 
         M_k = ca.inv(S_k)
         
@@ -175,20 +174,19 @@ def nlp_kalman(problem, alpha0, beta0, formulation):
         P_next, x_next = update(x_k, P_k, Q, S_k, alpha, us[k], ys[k], M=M_k)
         P_k0, x_k0 = update(x_k0, P_k0, Q0, Sk0, alpha0, us[k], ys[k])
         
-        x_k = typ.sym("x{}".format(k+1), model.nx)
-        P_vec = typ.sym("P{}".format(k+1), nP)
-        P_k = vec2sym(P_vec, model.nx, typ=typ)
+        x_k = misc.sym("x{}".format(k+1), model.nx)
+        P_vec = misc.sym("P{}".format(k+1), nP)
+        P_k = misc.vec2sym(P_vec, model.nx)
         
         nlp.add_var(x_k, x_k0)
-        nlp.add_var(P_vec, sym2vec(P_k0))
+        nlp.add_var(P_vec, misc.sym2vec(P_k0))
         nlp.add_eq((x_next - x_k))
-        nlp.add_eq(sym2vec(P_k - P_next))
+        nlp.add_eq(misc.sym2vec(P_k - P_next))
 
     return nlp
 
 def nlp_kalman_solve(problem, alpha0, beta0, formulation, opts={}, rescale=False):
     nlp = nlp_kalman(problem, alpha0, beta0, formulation)
-    nlp.stack()
     nlp.presolve(opts=opts)
     sol = nlp.solve()
     X = sol["x"].full().squeeze()
@@ -200,5 +198,5 @@ def nlp_kalman_solve(problem, alpha0, beta0, formulation, opts={}, rescale=False
     return alpha_found, beta_found, stats
 
 def init_P0(us, ys, x0, model, alpha, beta):
-    _, _, _, p0s, _, _ = model.kalman(us, ys, x0, np.zeros((model.nx, model.nx)), alpha, beta, save_pred=True)
+    p0s = model.kalman(us, ys, x0, np.zeros((model.nx, model.nx)), alpha, beta, save_pred=True)["Ps_pred"]
     return p0s[-1]

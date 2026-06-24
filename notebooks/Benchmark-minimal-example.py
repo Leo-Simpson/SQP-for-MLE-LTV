@@ -7,19 +7,18 @@
 # %matplotlib notebook
 
 # %%
-import sys, os
-from os.path import join, dirname
-main_dir = dirname(os.getcwd())
-sys.path.append(main_dir)
-
-# %%
+import sys
+from os.path import dirname, abspath
 import numpy as np
+import casadi as ca
 from time import time
-import matplotlib.pyplot as plt # type: ignore
-import casadi as ca # type: ignore
-from KalmanEst import ProblemParser, ModelParser # main objects to use the present algorithms
-from KalmanEst import plot_data, plot_est, plot_res # plotting tools
-rng = np.random.default_rng(seed=0)
+import matplotlib.pyplot as plt
+
+MAIN_DIR = dirname(dirname(abspath(__file__)))
+sys.path.insert(0, str(MAIN_DIR))
+import KalmanEst as KE
+
+rng = np.random.default_rng(seed=42)
 
 # %%
 dt = 1.
@@ -47,8 +46,8 @@ def dynamic(x, u, alpha, beta):
     ny = 2
     
     # noise model
-    Q =  beta[0] *  ca.DM.eye(nx)
-    R =  beta[1] *  ca.DM.eye(ny)
+    Q =  beta[0] *  KE.dm_eye(nx)
+    R =  beta[1] *  KE.dm_eye(ny)
     
     # inequality constraints on the form h > 0
     h = ca.vertcat(alpha, alpha_max - alpha, beta - beta_min)
@@ -57,10 +56,10 @@ def dynamic(x, u, alpha, beta):
 
 # %%
 # Define the model with Casadi symbolics
-x_symbol = ca.SX.sym("x", 3)
-u_symbol = ca.SX.sym("u", 1)
-alpha_symbol = ca.SX.sym("alpha", 2)
-beta_symbol = ca.SX.sym("beta", 2)
+x_symbol = KE.sym("x", 3)
+u_symbol = KE.sym("u", 1)
+alpha_symbol = KE.sym("alpha", 2)
+beta_symbol = KE.sym("beta", 2)
 xplus_symbol, y_symbol, Q_symbol, R_symbol, h_symbol = dynamic(x_symbol, u_symbol, alpha_symbol, beta_symbol)
 
 # %%
@@ -77,9 +76,9 @@ h_fn = ca.Function("h", [alpha_symbol, beta_symbol], [h_symbol])
 # %%
 Ntrain = 3000
 
-model_true = ModelParser(xplus_fn, y_fn, Q_fn, R_fn)
+model_true = KE.ModelParser(xplus_fn, y_fn, Q_fn, R_fn)
 model_true.Ineq = h_fn
-model = ModelParser(xplus_fn, y_fn, Q_fn, R_fn)
+model = KE.ModelParser(xplus_fn, y_fn, Q_fn, R_fn)
 model.Ineq = h_fn
 
 x0 = np.zeros(model_true.nx)
@@ -105,11 +104,11 @@ assert model_true.feasible(alpha_true, beta_true), "Constraints should be satisf
 # # Estimation
 
 # %%
-alpha_true, beta_true
+print(f"true alpha = {alpha_true} \n true beta = {beta_true}")
 
 # %%
 # the flag lti allow to speed things up for LTI systems 
-problemTrain =ProblemParser(
+problemTrain = KE.ProblemParser(
     model, ys_train, us_train, x0, P0, lti=True)
 formulation = "MLE"  # can be "MLE", "PredErr" (remark: to apply PredErr, one needs a different parameterization)
 
@@ -185,15 +184,11 @@ for name_algo, infos in res.items():
     print(" ")
 
 # %%
-fig = plot_res(res, "rtime", scale="lin")
-# fig = plot_res(res, "rtime-per-iter", scale="lin")
-
+fig1 = KE.plot_res(res, "rtime", scale="lin") # rtime-per-iter is also intersting
 # %%
-fig = plot_res(res, "error_alpha")
-
+fig2 = KE.plot_res(res, "error_alpha")
 # %%
-fig = plot_res(res, "error_beta")
-
+fig3 = KE.plot_res(res, "error_beta")
 # %%
-
+plt.show()
 # %%

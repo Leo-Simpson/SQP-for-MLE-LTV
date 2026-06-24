@@ -1,27 +1,20 @@
-from math import ceil
-import matplotlib
-import numpy as np # type: ignore
-import matplotlib.pyplot as plt # type:ignore
-
+import numpy as np
+from matplotlib import rc
+import matplotlib.pyplot as plt
 
 colors = ["darkcyan", "orange", "pink"]
 colors2 = ["darkcyan", "orange", "pink"]
 colors_pred = ["purple", "firebrick", "olive"]
 colors_u = ["brown", "green", "yellow"]
 
-def latexify():
-    params = {
-        'text.latex.preamble': r"\usepackage{gensymb} \usepackage{amsmath}",
-        'axes.labelsize': 10,
-        'axes.titlesize': 10,
-        'legend.fontsize': 10,
-        'xtick.labelsize': 10,
-        'ytick.labelsize': 10,
-        'text.usetex': True,
-        'font.family': 'serif'
-    }
-
-    matplotlib.rcParams.update(params)
+# Enable LaTeX font rendering
+rc('text', usetex=True)
+rc('font', family='serif')
+rc('text.latex', preamble=r'\usepackage{gensymb} \usepackage{amsmath}')
+rc('axes', labelsize=10, titlesize=10)
+rc('legend', fontsize=10)
+rc('xtick', labelsize=10)
+rc('ytick', labelsize=10)
 
 def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabels=None, legend=True, xlabel="time (sec)",
                 ylabel="", legend_order=None, ax4legend=None, u_other_scale=None, figsize=(8, 4), title=None
@@ -46,7 +39,6 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
 
     
     N, ny = ys.shape
-    N, nu = us.shape
     ts = np.arange(N) * dt
     if us is not None:
         nu = us.shape[1]
@@ -61,7 +53,7 @@ def plot_data(us, ys, ys_true=None, dt=1., char="-", alpha_u=1., ax=None, ulabel
                 # ax2.set_yticks([0., 1.], color=colors_u[j])
                 # ax2.set_ylabel(r"Valve position $u_{2}$", color=colors_u[j])
                 ax_ = axu
-            ax_.plot(ts[:N], us[:, j], char, label=ulabels[j], alpha=alpha_u, color=colors_u[j])
+            ax_.plot(ts[:N-1], us[:, j], char, label=ulabels[j], alpha=alpha_u, color=colors_u[j])
     for i in range(ny):
         alphay = 1 #  / (i+1)
         ax.plot(ts, ys[:N, i], char, label=r"$y_{"+str(i+1)+r", k}$", color=colors[i], alpha=alphay)
@@ -110,7 +102,6 @@ def plot_est(us, ys, yest, dt=1.,
     alpha_tube = 0.5
     linewidth_pred = 1. # used to be 3
     N, ny = ys.shape
-    N, nu = us.shape
     ts = np.arange(N)*dt
     if us is not None:
         nu = us.shape[1]
@@ -120,7 +111,7 @@ def plot_est(us, ys, yest, dt=1.,
             ax_ = ax
             if u_other_scale is not None and j in u_other_scale:
                 ax_ = axu
-            ax_.plot(ts, us[:, j], char, label=r"$u^{}_k$".format(j+1), alpha=alpha_u, color=colors_u[j])
+            ax_.plot(ts[:N-1], us[:, j], char, label=r"$u^{}_k$".format(j+1), alpha=alpha_u, color=colors_u[j])
     
     if pred is not None:
         tspred, yspred = pred
@@ -239,4 +230,3 @@ def plot_res(res, key, ax=None, chars=None, notationN="$N$", relabel=None, scale
     fig.tight_layout()
     if new_fig:
         return fig
-

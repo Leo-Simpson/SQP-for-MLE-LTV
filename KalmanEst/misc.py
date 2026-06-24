@@ -1,7 +1,19 @@
-import casadi as ca  # type: ignore
-import numpy as np  # type: ignore
-import numpy.linalg as LA  # type: ignore
-from scipy.linalg import lapack # type: ignore
+import casadi as ca 
+import numpy as np 
+import numpy.linalg as LA 
+from scipy.linalg.lapack import dpotrf, dpotri # type: ignore  #### apparently this is not known by Pylance, but they mention it there: # https://stackoverflow.com/questions/40703042/more-efficient-way-to-invert-a-matrix-knowing-it-is-symmetric-and-positive-semi
+from typing import Any, cast
+
+# Wrapper to avoid linter warnings on casadi type implementation problems
+def sym(name: str, *shape: int | tuple[int, ...]) -> ca.SX:
+    sx_type = cast(Any, ca.SX)
+    if len(shape) == 1 and isinstance(shape[0], tuple):
+        return cast(ca.SX, sx_type.sym(name, *shape[0]))
+    return cast(ca.SX, sx_type.sym(name, *shape))
+
+def dm_eye(size: int) -> ca.DM:
+    dm_type = cast(Any, ca.DM)
+    return cast(ca.DM, dm_type.eye(size))
 
 
 def symmetrize(x):
@@ -13,13 +25,13 @@ def psd_inverse(m, inds, det=True):
             return 1./m, np.log(m[0,0])
         else:
             return 1/m
-    # https://stackoverflow.com/questions/40703042/more-efficient-way-to-invert-a-matrix-knowing-it-is-symmetric-and-positive-semi
-    cholesky, info = lapack.dpotrf(m)
+    # see https://stackoverflow.com/questions/40703042/more-efficient-way-to-invert-a-matrix-knowing-it-is-symmetric-and-positive-semi for why using these function.
+    cholesky, info = dpotrf(m)
     if info != 0:
         print(m)
         raise ValueError("dpotrf failed")
-    inv, info = lapack.dpotri(cholesky)
-    
+    inv, info = dpotri(cholesky)
+
     if info != 0:
         raise ValueError("dpotri failed")
     tri2sym(inv, inds)
@@ -41,11 +53,10 @@ def vecToTriu(Pvec, nx):
 def triuToVec(P):
     return P[P.sparsity().makeDense()[0].get_upper()]
 
-def vec2sym(vec, n, typ=ca.DM):
+def vec2sym(vec, n):
     if len(vec.shape) == 2 and vec.shape[1] == n:
         return vec
-
-    P = typ.zeros((n, n))
+    P = ca.SX.zeros(n, n)
     k = 0
     for i in range(n):
         P[i, i] = vec[k]
@@ -97,12 +108,16 @@ def tri2sym(m, inds):
 def l1(x):
     return abs(x).sum()
 
+from packaging.version import Version
+
 def select_jac(A, nx):
-    # function to take only the jacobian w.r.t. the first variable after using jacobian()
-    casadi_version = ca.__version__
-    if casadi_version[:3] == "3.5":
+    """
+        Select the Jacobian block with respect to the first variable.
+
+        CasADi <= 3.5 returns a matrix-like Jacobian, while newer versions
+        return a tuple/list-like object.
+    """
+    if Version(ca.__version__) < Version("3.6"):
         return A[:, :nx]
-    elif casadi_version[:3] == "3.6":
-        return A[0]
     else:
-        raise ValueError(f"Unknown casadi version {casadi_version}")
+        return A[0]

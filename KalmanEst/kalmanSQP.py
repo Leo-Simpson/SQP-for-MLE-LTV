@@ -1,9 +1,8 @@
 import casadi as ca #type: ignore
-import numpy as np # type: ignore
-from qpsolvers import Problem as Problem_QP
-from qpsolvers import solve_problem as solve_qp
+import numpy as np
+import qpsolvers
 from time import time
-from .misc import symmetrize, symmetrize, psd_inverse, select_jac
+import KalmanEst.misc as misc
 
 default_opts = {"maxiter":50,
           "pen_step":1e-5,
@@ -74,7 +73,7 @@ class OPTKF:
             "prepare","cost_eval","derivatives","QP",
             "get_AbC","get_dAb","get_dQR","total"
             ]
-        self.rtimes = {key:0 for key in fn_names}
+        self.rtimes = {key:0. for key in fn_names}
         self.ncall = {key:0 for key in fn_names}
 
     def complete_opts(self, opts):
@@ -84,8 +83,8 @@ class OPTKF:
         return options
             
     def make_constr(self, eqconstr=True):
-        alpha = ca.SX.sym("alpha_sym", self.model.nalpha)
-        beta = ca.SX.sym("beta_sym", self.model.nbeta)
+        alpha = misc.sym("alpha_sym", self.model.nalpha)
+        beta = misc.sym("beta_sym", self.model.nbeta)
         ab = ca.vertcat(alpha, beta)
         # inequality constraints are user defined
         self.ineqconstraints = ca.Function("ineqcstr", [ab], [self.model.Ineq(alpha, beta)])
@@ -141,8 +140,8 @@ class OPTKF:
         t0 = time()
         dQ = self.dQ_fn(beta).full().reshape(self.model.nx, self.model.nx, self.model.nbeta)
         dR = self.dR_fn(beta).full().reshape(self.model.ny, self.model.ny, self.model.nbeta)
-        dQ = symmetrize(dQ)
-        dR = symmetrize(dR)
+        dQ = misc.symmetrize(dQ)
+        dR = misc.symmetrize(dR)
         self.rtimes["get_dQR"] += time() - t0
         self.ncall["get_dQR"] += 1
         return dQ, dR
@@ -271,7 +270,7 @@ class OPTKF:
         kkt_error =  gradient + self.derineqconstraints(ab, 0).full().T @ multiplier
         return np.sum( abs(kkt_error))
 
-    def solveQP(self, Q, p, constr, eqconstr, x_start, solver="proxqp"):
+    def solveQP(self, Q, p, constr, eqconstr, x_start, solver="cvxopt"):
         """
             solve the QP:
             minimize  0.5 *  x^T s*Q x  + s*p @ x
@@ -284,8 +283,8 @@ class OPTKF:
             A, b = None, None
         else: 
             A, b = eqconstr
-        problem_QP = Problem_QP(s*Q, s*p, G, h, A, b)
-        sol = solve_qp(problem_QP, initvals=x_start, solver=solver, verbose=False)
+        problem_QP = qpsolvers.Problem(s*Q, s*p, G, h, A, b)
+        sol = qpsolvers.solve_problem(problem_QP, initvals=x_start, solver=solver, verbose=False)
         x = sol.x
         lam = sol.z
         der = -(p + Q @ x_start) @ (x - x_start)
@@ -371,13 +370,13 @@ class OPTKF:
 
 def gradient_dyna_fn(model, us, lti=False, no_u=False):
     xzero = np.zeros(model.nx)
-    alpha = ca.SX.sym("alpha temp", model.nalpha)
+    alpha = misc.sym("alpha temp", model.nalpha)
     A_syms, b_syms = [], []
     dA_syms, db_syms = [], []
     dF = model.Fdiscr.jacobian()
     N = len(us)
     for k in range(N):
-        A = select_jac( dF(xzero, us[k], alpha, 0), model.nx)
+        A = misc.select_jac( dF(xzero, us[k], alpha, 0), model.nx)
         dA = ca.jacobian(A, alpha)
         A_syms.append(A)
         dA_syms.append(dA)
@@ -435,7 +434,7 @@ def prepareQP(xbar, gradient, hessian, pen_step=0, L2reg=0.):
 def kalman_step(A, b, C, Q, R, P, x, y, inds_tri):
     PC = P @ C.T
     S = C @ PC + R
-    M, logdetS = psd_inverse(S, inds_tri)
+    M, logdetS = misc.psd_inverse(S, inds_tri)
     L = A @ (PC @ M)
     e = y - C @ x
     Pplus = A @ P @ A.T - L @ S @ L.T + Q
@@ -448,7 +447,7 @@ def kalman_step_dalpha(dx_dalpha, dP_dalpha, dA, db, e, M, S, C, x, L, P, A):
     de_dalpha = - C @ dx_dalpha
     dL_dalpha = myprod2(A @ (P @ C.T), dM_dalpha) + myprod1(myprod2(A, dP_dalpha), C.T @ M) + myprod1(dA, P @ (C.T @ M))
     dPplus_dalpha = myprod3(A, dP_dalpha) - myprod3(L, dS_dalpha) -  2 * myprod1(dL_dalpha, S @ L.T) + 2 * myprod1(dA, P @ A.T)
-    dPplus_dalpha = symmetrize(dPplus_dalpha)
+    dPplus_dalpha = misc.symmetrize(dPplus_dalpha)
     dxplus_dalpha = A @ dx_dalpha + myprodvec(dL_dalpha, e) + L @ de_dalpha  + myprodvec(dA, x) + db
     return dM_dalpha, de_dalpha, dPplus_dalpha, dxplus_dalpha
 
@@ -458,6 +457,6 @@ def kalman_step_dbeta(dx_dbeta, dP_dbeta, dQ, dR, e, M, S, C, x, L, P, A):
     de_dbeta = - C @ dx_dbeta
     dL_dbeta = myprod2(A @ (P @ C.T), dM_dbeta) + myprod1(myprod2(A, dP_dbeta), C.T @ M)
     dPplus_dbeta = myprod3(A, dP_dbeta) - myprod3(L, dS_dbeta) -  2 * myprod1(dL_dbeta, S @ L.T) + dQ
-    dPplus_dbeta = symmetrize(dPplus_dbeta)
+    dPplus_dbeta = misc.symmetrize(dPplus_dbeta)
     dxplus_dbeta = A @ dx_dbeta + myprodvec(dL_dbeta, e)+ L @ de_dbeta
     return dM_dbeta, de_dbeta, dPplus_dbeta, dxplus_dbeta
