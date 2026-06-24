@@ -15,6 +15,16 @@ def dm_eye(size: int) -> ca.DM:
     dm_type = cast(Any, ca.DM)
     return cast(ca.DM, dm_type.eye(size))
 
+def dm2np(dm, shape="vector") -> np.ndarray:
+    dm_ = cast(ca.DM, dm)
+    arr = dm_.full()
+    if shape == "vector":
+        return arr.reshape(-1)
+    elif shape == "matrix":
+        return arr
+    else:
+        raise ValueError(f"Unknown shape {shape}, should be 'vector' or 'matrix' ")
+
 
 def symmetrize(x):
     return 0.5 * (x + np.swapaxes(x, 0, 1))

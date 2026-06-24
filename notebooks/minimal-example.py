@@ -176,7 +176,7 @@ dict_kalman = problemTest.kalman(alpha_found, beta_found)
 xs_est, ys_est = dict_kalman["xs_est"], dict_kalman["ys_est"]
 
 npred = 3
-t_pred, y_pred =  model.predictions(us_test, xs_est, alpha_found, npred)
+t_pred, y_pred =  model.sim_predictions(us_test, xs_est, alpha_found, npred)
 
 # %%
 fig = KE.plot_est(us_test, ys_test, ys_est, pred=(t_pred, y_pred))

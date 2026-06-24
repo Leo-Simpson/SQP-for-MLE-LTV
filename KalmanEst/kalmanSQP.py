@@ -101,14 +101,14 @@ class OPTKF:
     def make_lin_constr(self, ab):
         # inequality constraints
         Gconstr = - self.derineqconstraints(ab, 0).full()
-        hconstr = self.ineqconstraints(ab).full().squeeze() + Gconstr @ ab
+        hconstr = misc.dm2np(self.ineqconstraints(ab)) + Gconstr @ ab
         ineq = (Gconstr, hconstr)
         # equatlity constraints
         if self.eqconstr is None:
             eq = None
         else:
             Aconstr = -self.dereqconstraints(ab, 0).full()
-            bconstr = self.eqconstr(ab).full().squeeze() + Aconstr @ ab
+            bconstr = misc.dm2np(self.eqconstr(ab)) + Aconstr @ ab
             eq = (Aconstr, bconstr)
         return ineq, eq
 
@@ -287,6 +287,7 @@ class OPTKF:
         sol = qpsolvers.solve_problem(problem_QP, initvals=x_start, solver=solver, verbose=False)
         x = sol.x
         lam = sol.z
+        assert x is not None, f"QP solver failed: {sol}"
         der = -(p + Q @ x_start) @ (x - x_start)
         self.rtimes["QP"] += time() - t0
         self.ncall["QP"] += 1
@@ -314,7 +315,7 @@ class OPTKF:
         if auxs_is_None:
             if der < 0.:
                 return f"non-descending direction : derivative={der:.2e}"
-            return "globalization.maxiter"     
+            return "globalization.maxiter"
         elif kkt_error < self.opts["tol.kkt"]:
             return f"tol.kkt : kkt error= {kkt_error:.2e}"
         elif der < self.opts["tol.direction"]:

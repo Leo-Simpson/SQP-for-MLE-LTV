@@ -49,7 +49,7 @@ class NLP:
     def verif_init(self, tol=1e-8):
         x_sym = ca.vcat(self.nlp["x"])
         g_sym = ca.vcat(self.nlp["g"])
-        g0 = ca.Function("constr", [x_sym], [g_sym])(self.solver_dict["x0"]).full().squeeze()
+        g0 = misc.dm2np(ca.Function("constr", [x_sym], [g_sym])(self.solver_dict["x0"]))
         cond = np.all(g0 <= self.solver_dict["ubg"]+tol) and np.all(g0 >= self.solver_dict["lbg"]-tol)
         if not cond:
             raise ValueError("The initial point does not satisfy the constraints")
@@ -77,7 +77,7 @@ class NLP:
         }
         self.nlpsol = ca.nlpsol("S", "ipopt", nlp_stack, self.nlpsolver_options)
 
-    def solve(self) -> tuple:
+    def solve(self) -> dict:
         r = self.nlpsol(
             x0=self.solver_dict["x0"],
             lbx=self.solver_dict["lbx"],
@@ -188,10 +188,9 @@ def nlp_kalman(problem, alpha0, beta0, formulation):
 def nlp_kalman_solve(problem, alpha0, beta0, formulation, opts={}, rescale=False):
     nlp = nlp_kalman(problem, alpha0, beta0, formulation)
     nlp.presolve(opts=opts)
-    sol = nlp.solve()
-    X = sol["x"].full().squeeze()
-    alpha_found = X[:problem.nalpha]
-    beta_found = X[problem.nalpha:problem.nalpha+problem.nbeta]
+    x = misc.dm2np(nlp.solve()["x"])
+    alpha_found = x[:problem.nalpha]
+    beta_found = x[problem.nalpha:problem.nalpha+problem.nbeta]
     stats = nlp.nlpsol.stats()
     if rescale:
         beta_found = beta_found * problem.scale(alpha_found, beta_found)

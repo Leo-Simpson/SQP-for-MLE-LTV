@@ -41,7 +41,7 @@ class ModelParser:
         if self.Ineq is None:
             return True
         else:
-            return self.Ineq(alpha, beta).full().min() > 0.
+            return misc.dm2np(self.Ineq(alpha, beta)).min() > 0.
 
 
     def trajectory(self, x0, us, alpha):
@@ -50,7 +50,7 @@ class ModelParser:
         for i in range(len(us)):
             x = self.Fdiscr(x, us[i], alpha)
             xs.append(x)
-        return xs
+        return ca.hcat(xs)
     
     def trajectory_P(self, P0, us, alpha, Q):
         P = P0.copy()
@@ -60,20 +60,21 @@ class ModelParser:
             Ps.append(P)
         return Ps
 
-    def predictions(self, us, xs, alpha, npred, Npred=None):
+    def sim_predictions(self, us, xs, alpha, npred, Npred=None):
         N = len(us)
         ts = np.arange(N+1, dtype=int)
         ys_pred, ts_pred = [], []
         if Npred is None:
             Npred = int(float(N) / npred)  # this is the number of time point in one interval of prediction
         interval = int(  float(N - Npred) / (npred - 1) )
+        G_map  = self.G.map(Npred+1)
         for i in range(npred):
             idx = i * interval
             xstart = xs[idx]
             upred = us[idx:idx+Npred]
             tpred = ts[idx:idx+Npred+1]
             xpred = self.trajectory(xstart, upred, alpha)
-            ypred = np.array([ self.G(x).full().squeeze() for x in xpred])
+            ypred = misc.dm2np(G_map(xpred), shape="matrix").T
             ys_pred.append(ypred)
             ts_pred.append(tpred)
 
@@ -146,7 +147,7 @@ class ModelParser:
         xplus = self.Fdiscr(x, u, alpha)
         y = self.G(x)
 
-        d = misc.sym("d", y.shape[0])
+        d = misc.sym("d", self.ny)
         dplus = d
         yaug = y + d
         self.Fdiscr = ca.Function(
@@ -273,15 +274,21 @@ class ProblemParser:
         dict_kalman = self.kalman(alpha, beta, data_ind=data_ind, save_Pest=True)
         xs_est, ys_est, Ps_est = dict_kalman["xs_est"], dict_kalman["ys_est"], dict_kalman["Ps_est"]
 
-        t_pred, y_pred = self.model.predictions(self.us[data_ind], xs_est, alpha, npred, Npred=Npred)
+        t_pred, y_pred = self.model.sim_predictions(self.us[data_ind], xs_est, alpha, npred, Npred=Npred)
+
+        dict_to_return: dict[str, np.ndarray] = {
+            "t_pred": t_pred,
+            "y_pred": y_pred,
+            "ys_est": ys_est
+        }
         if Spred:
-            S_pred = self.model.predictions_S(self.us[data_ind], Ps_est, alpha, beta, npred, Npred=Npred)
-            return t_pred, y_pred, ys_est, S_pred
-        else:
-            return t_pred, y_pred, ys_est
+            S_pred = self.model.sim_predictions_S(self.us[data_ind], Ps_est, alpha, beta, npred, Npred=Npred)
+            dict_to_return["S_pred"] = S_pred
+        return dict_to_return
 
     def error_prediction(self, alpha, beta, npred, Npred):
-        idx_preds, y_preds, ys_est = self.predictions(alpha, beta, npred, Npred=Npred)
+        dict_pred = self.predictions(alpha, beta, npred, Npred=Npred)
+        idx_preds, y_preds = dict_pred["t_pred"], dict_pred["y_pred"]
         error = 0.
         for idx_pred, y_pred in zip(idx_preds, y_preds):
             ys_true = self.ys[idx_pred]
