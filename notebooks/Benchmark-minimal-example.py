@@ -114,10 +114,10 @@ formulation = "MLE"  # can be "MLE", "PredErr" (remark: to apply PredErr, one ne
 
 # %%
 dict_opts = {
-    "SQP":{"pen_step":1e-4, "maxiter":20, "tol.direction":0., "tol.kkt":1e-8}, # parameters of the SQP method
+    "SQP":{}, # parameters of the SQP method
     "IPOPT":{} # use default parameters of IPOPT
 }
-Ns = [200, 500, 1000, 1500]
+Ns = np.linspace(100, Ntrain, 10, dtype=int) # number of data used for the estimation
 def diff(x1, x2):
     return np.sum((x1-x2)**2)
 
@@ -128,14 +128,13 @@ res = {}
 
 alpha0 = np.ones(model.nalpha) * 0.2
 beta0 = np.ones(model.nbeta) * 0.2
-for algorithm, einsum in [("SQP", True), ("SQP", False), ("IPOPT", None)]: # the second element is wether we use einsum or not
+for algorithm in ["SQP", "IPOPT"]:
     infos = {}
-    for N in Ns:
-        name_algo = algorithm + " with einsum = " + str(einsum)
-        print("Algorithm : {}, N = {}".format(name_algo, N))
+    for i, N in enumerate(Ns):
+        name_algo = algorithm
+        print(f"Algorithm : {name_algo}, N = {N} ({i+1}/{len(Ns)})")
         problemTrain.cut(N)
         t0 = time()
-        dict_opts[algorithm]["einsum"] = einsum
         alpha, beta, stats = problemTrain.solve(alpha0, beta0,
                                                 formulation, algorithm,
                                                 opts=dict_opts[algorithm], verbose=False)
